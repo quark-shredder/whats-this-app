@@ -85,18 +85,22 @@ async function ollama(body) {
 
 async function describe(image, mode) {
   // stage 1 - look, and only look
+  const t1 = Date.now();
   const seen = await ollama({
     prompt: SEE, images: [image],
     options: { temperature: 0.2, num_predict: 40 }
   });
+  const seeMs = Date.now() - t1;
   if (!seen) throw new Error('nothing seen');
 
   // stage 2 - say it the way a small child wants to hear it
+  const t2 = Date.now();
   const said = await ollama({
     prompt: (SAY[mode] || SAY.ask).replace('%s', seen),
     options: { temperature: 0.8, num_predict: mode === 'ambient' ? 45 : 90 }
   });
-  return { text: said || seen, seen };
+  const sayMs = Date.now() - t2;
+  return { text: said || seen, seen, seeMs, sayMs };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -112,12 +116,15 @@ const server = http.createServer(async (req, res) => {
     try {
       const { image, mode } = JSON.parse(await readBody(req));
       if (!image) throw new Error('no image');
-      const { text, seen } = await describe(image, mode);
-      console.log(`[${mode}] ${Date.now() - started}ms  saw="${seen}"  ->  ${text.slice(0, 60)}`);
+      const bytes = Math.round(image.length * 0.75 / 1024);
+      const { text, seen, seeMs, sayMs } = await describe(image, mode);
+      const total = Date.now() - started;
+      console.log(`[${mode}] total=${total}ms (see=${seeMs} say=${sayMs} other=${total - seeMs - sayMs}) ` +
+                  `img=${bytes}KB  saw="${seen.replace(/\n/g, ' ')}"`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ text, seen, ms: Date.now() - started }));
+      return res.end(JSON.stringify({ text, seen, ms: total, seeMs, sayMs }));
     } catch (err) {
-      console.error('describe failed:', err.message);
+      console.error(`describe failed after ${Date.now() - started}ms:`, err.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: err.message }));
     }

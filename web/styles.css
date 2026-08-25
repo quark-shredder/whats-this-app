@@ -151,3 +151,21 @@ body{
 @media (prefers-reduced-motion: reduce){
   .buddy,.buddy .hand,.buddy .face,.thinking-text{animation:none}
 }
+
+/* ── words light up as they are spoken ──────
+   A 4-7 year old is learning to read. Tying each word to the moment
+   it is heard turns listening into reading practice. */
+.bubble .word{
+  display:inline-block;
+  white-space:pre;          /* each span carries its trailing space - inline-block would eat it */
+  transition:color .12s ease, transform .12s ease;
+}
+.bubble .word.lit{
+  color:#e8590c;
+  transform:translateY(-3px) scale(1.12);
+  text-shadow:0 2px 0 rgba(255,183,3,.35);
+}
+@media (prefers-reduced-motion: reduce){
+  .bubble .word{transition:color .12s ease}
+  .bubble .word.lit{transform:none}
+}

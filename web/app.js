@@ -36,14 +36,41 @@ function pickVoice() {
 }
 speechSynthesis.onvoiceschanged = pickVoice; pickVoice();
 
-function speak(text) {
+// Speaks `text`. If `onWord` is given it is called with the character offset of
+// each word as that word is spoken, so the caption can follow along.
+function speak(text, onWord) {
   return new Promise(resolve => {
     if (!text || !('speechSynthesis' in window)) return resolve();
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     if (voice) { u.voice = voice; u.lang = voice.lang; }
     u.rate = VOICE_RATE; u.pitch = VOICE_PITCH;
-    u.onend = u.onerror = () => resolve();
+
+    let fallback = null;
+    if (onWord) {
+      u.onboundary = e => { if (e.name === 'word') onWord(e.charIndex); };
+      // Some Android voices never fire boundary events. If none arrive shortly
+      // after speech starts, step through the words on a timer instead.
+      u.onstart = () => {
+        let fired = false;
+        const seen = u.onboundary;
+        u.onboundary = e => { fired = true; seen(e); };
+        setTimeout(() => {
+          if (fired) return;
+          const offsets = [];
+          const re = /\S+/g; let m;
+          while ((m = re.exec(text))) offsets.push(m.index);
+          const per = (text.length / 14) / VOICE_RATE * 1000 / Math.max(offsets.length, 1);
+          let i = 0;
+          fallback = setInterval(() => {
+            if (i >= offsets.length) return clearInterval(fallback);
+            onWord(offsets[i++]);
+          }, per);
+        }, 350);
+      };
+    }
+    const done = () => { clearInterval(fallback); resolve(); };
+    u.onend = u.onerror = done;
     speechSynthesis.speak(u);
   });
 }
@@ -154,19 +181,63 @@ function sceneChanged() {
 
 /* ── the model call ─────────────────────────────────────── */
 async function describe(imageDataUrl, m) {
-  const res = await fetch('/api/describe', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image: imageDataUrl.split(',')[1], mode: m })
-  });
-  if (!res.ok) throw new Error('describe failed');
-  return (await res.json()).text;
+  const t0 = performance.now();
+  const body = JSON.stringify({ image: imageDataUrl.split(',')[1], mode: m });
+  const kb = Math.round(body.length / 1024);
+
+  // One retry: on a phone the connection drops often enough that a single
+  // blip should not become "I couldn't see that".
+  let lastErr;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 30000);
+    try {
+      const res = await fetch('/api/describe', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body, signal: ctrl.signal, keepalive: false
+      });
+      clearTimeout(timer);
+      if (!res.ok) throw new Error('http ' + res.status);
+      const data = await res.json();
+      console.log(`[${m}] tap->caption ${Math.round(performance.now() - t0)}ms ` +
+                  `(server ${data.ms}ms: see ${data.seeMs} say ${data.sayMs}) upload ${kb}KB` +
+                  (attempt > 1 ? ` [retry ${attempt}]` : ''));
+      return data.text;
+    } catch (err) {
+      clearTimeout(timer);
+      lastErr = err;
+      console.warn(`[${m}] attempt ${attempt} failed after ` +
+                   `${Math.round(performance.now() - t0)}ms: ${err.message}`);
+    }
+  }
+  throw lastErr;
 }
 
+// The caption is rendered one <span> per word so the spoken word can be lit up.
+// wordAt maps a character offset back to its span.
+let wordSpans = [], wordStarts = [];
+
 function show(text) {
-  bubbleText.textContent = text;
+  bubbleText.textContent = '';
+  wordSpans = []; wordStarts = [];
+  const re = /\S+\s*/g; let m;
+  while ((m = re.exec(text))) {
+    const span = document.createElement('span');
+    span.className = 'word';
+    span.textContent = m[0];
+    bubbleText.append(span);
+    wordSpans.push(span); wordStarts.push(m.index);
+  }
   bubble.hidden = false;
 }
+
+function lightWord(charIndex) {
+  let idx = 0;
+  while (idx + 1 < wordStarts.length && wordStarts[idx + 1] <= charIndex) idx++;
+  wordSpans.forEach((s, i) => s.classList.toggle('lit', i === idx));
+}
+
+function clearWords() { wordSpans.forEach(s => s.classList.remove('lit')); }
 
 /* ── ask mode: one tap, one answer ──────────────────────── */
 async function ask() {
@@ -182,7 +253,8 @@ async function ask() {
     celebrate();
     show(text);
     save(grab(180, 0.5), text);
-    await speak(text);
+    await speak(text, lightWord);
+    clearWords();
   } catch (err) {
     clearInterval(thinkTimer); thinkTimer = null;
     setFace('oops'); thinkingText.textContent = 'Oops!';
@@ -205,7 +277,8 @@ async function ambientLoop() {
           if (!ambientOn) break;
           show(text);
           save(grab(180, 0.5), text);
-          await speak(text);          // next look waits until this finishes
+          await speak(text, lightWord); // next look waits until this finishes
+          clearWords();
         }
       } catch (_) { /* a dropped frame is not worth telling a child about */ }
     }
@@ -279,7 +352,7 @@ async function go(to) {
 document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
 shutter.onclick  = ask;
 pauseBtn.onclick = () => { ambientOn ? stopAmbient() : startAmbient(); };
-$('replay').onclick = () => speak(bubbleText.textContent);
+$('replay').onclick = () => speak(bubbleText.textContent, lightWord).then(clearWords);
 
 // Pause everything when the app goes to the background.
 document.addEventListener('visibilitychange', () => { if (document.hidden) { stopAmbient(); speechSynthesis.cancel(); } });
