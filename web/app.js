@@ -4,7 +4,8 @@ const $ = id => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), tiny = $('tiny');
 const bubble = $('bubble'), bubbleText = $('bubbleText');
 const shutter = $('shutter'), pauseBtn = $('pause'), livedot = $('livedot');
-const thinking = $('thinking'), critter = $('critter'), thinkingText = $('thinkingText');
+const thinking = $('thinking'), thinkingText = $('thinkingText');
+const buddy = document.querySelector('.buddy'), buddyFace = $('buddyFace');
 
 const AMBIENT_MS  = 5000;   // gap between automatic looks
 const DIFF_THRESH = 9;      // 0-255; below this the scene counts as "unchanged"
@@ -50,7 +51,8 @@ function speak(text) {
 /* ── the wait ───────────────────────────────────────────────
    Three seconds is a long time for a small child staring at a
    frozen button, so we give them a friend to watch instead. */
-const CRITTERS = ['1f419', '1f996', '1f47e', '1f929', '1f440', '1f42c'];
+// Pip's faces, from Kenney's CC0 set. Each one is a mood.
+const FACES = { think: 'face_h', curious: 'face_e', happy: 'face_l', oops: 'face_i' };
 const THINKING_WORDS = [
   'Let me look…', 'Ooh, what is it?', 'Thinking…',
   'Looking closely…', 'Almost got it…', 'Hmm, interesting…'
@@ -76,13 +78,29 @@ function chime() {
   } catch (_) { /* audio is a bonus, never a blocker */ }
 }
 
+const pick = a => a[Math.floor(Math.random() * a.length)];
+
+function setFace(mood) { buddyFace.src = `char/${FACES[mood]}.png`; }
+
 function startThinking() {
-  const pick = a => a[Math.floor(Math.random() * a.length)];
-  critter.src = `anim/${pick(CRITTERS)}.webp`;
+  buddy.classList.remove('happy');
+  setFace('think');
   thinkingText.textContent = pick(THINKING_WORDS);
   thinking.hidden = false;
   clearInterval(thinkTimer);
-  thinkTimer = setInterval(() => { thinkingText.textContent = pick(THINKING_WORDS); }, 1600);
+  thinkTimer = setInterval(() => {
+    thinkingText.textContent = pick(THINKING_WORDS);
+    setFace(Math.random() < 0.5 ? 'think' : 'curious');   // small glance, keeps it alive
+  }, 1600);
+}
+
+// Pip cheers, then gets out of the way so the answer can be read.
+function celebrate() {
+  clearInterval(thinkTimer); thinkTimer = null;
+  setFace('happy');
+  thinkingText.textContent = 'Got it!';
+  buddy.classList.add('happy');
+  setTimeout(() => { thinking.hidden = true; buddy.classList.remove('happy'); }, 900);
 }
 
 function stopThinking() {
@@ -161,16 +179,17 @@ async function ask() {
     const full = grab(768, 0.7);
     if (!full) throw new Error('no frame');
     const text = await describe(full, 'ask');
-    stopThinking();
+    celebrate();
     show(text);
     save(grab(180, 0.5), text);
     await speak(text);
   } catch (err) {
-    stopThinking();
+    clearInterval(thinkTimer); thinkTimer = null;
+    setFace('oops'); thinkingText.textContent = 'Oops!';
+    setTimeout(stopThinking, 900);
     const oops = "Hmm, I couldn't see that. Let's try again!";
     show(oops); await speak(oops);
   } finally {
-    stopThinking();
     busy = false; shutter.disabled = false;
   }
 }
