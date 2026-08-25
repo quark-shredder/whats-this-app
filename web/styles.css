@@ -51,9 +51,10 @@ body{
 /* Pip only looks at the middle of the frame, so show the child where that is.
    Cropping is what fixed the cluttered-scene problem; the brackets teach the aim. */
 .aim{
-  /* exactly what gets cropped and sent: a centred square, 65% of the short side */
-  position:absolute;left:50%;top:42%;
-  width:min(65vw,65vh);height:min(65vw,65vh);
+  /* exactly what gets cropped and sent: a centred rectangle measured against
+     the short side - 68% wide, 74% tall, so it is taller than it is wide */
+  position:absolute;left:50%;top:44%;
+  width:min(68vw,68vh);height:min(74vw,74vh);
   transform:translate(-50%,-50%);
   z-index:2;pointer-events:none;border-radius:18px;
   box-shadow:0 0 0 2px rgba(227,106,106,.7) inset;

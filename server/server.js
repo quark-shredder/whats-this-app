@@ -22,6 +22,34 @@ kind instead - say "a flower", not a specific species you are unsure of.
 Then add 2 or 3 plain words about what it looks like.
 No excitement, no fun facts, no story. Just what is there.`;
 
+// Asking the model to "start with a happy word" made it say "Wow!" almost every
+// time. Choosing the opener here guarantees variety - and a good share of the
+// time there is no exclamation at all, which stops it sounding like a formula.
+const OPENERS = [
+  // plain delight
+  'Ooh!', 'Oooh!', 'Wow!', 'Woah!', 'Oh!', 'Aha!', 'Hey!', 'Ooo!',
+  'Yay!', 'Ha!', 'Oho!', 'Wheee!', 'Ooh la la!', 'Well well!', 'Goodness!',
+  // pointing it out
+  'Look!', 'Look at that!', 'Look here!', 'Ooh, look!', 'Oh look!',
+  'Would you look at that!', 'Check this out!', 'See that?',
+  // sharing a secret
+  'Guess what!', 'Guess what I found!', 'Ooh, I know this one!',
+  'I know this!', 'Oh, I love these!', 'This is a good one!',
+  // wondering
+  'Hmm!', 'Ooh, interesting!', 'Now then!', 'Well!', 'Oh my!',
+  'Fancy that!', 'How lovely!', 'How nice!', 'Lovely!',
+  // greeting the thing itself
+  'Hello!', 'Hello there!', 'Oh, hello!', 'Well hello!',
+  // small delighted noises
+  'Eee!', 'Ooh yes!', 'Ah!', 'Ahh!', 'Oooh yes!'
+];
+
+function opener() {
+  // A third of the time there is no exclamation at all - without that, even a
+  // long list starts to sound like a formula.
+  return Math.random() < 0.34 ? null : OPENERS[Math.floor(Math.random() * OPENERS.length)];
+}
+
 const SAY = {
   ask: `You are Pip, a warm, playful little creature who is best friends with a child aged 4 to 7.
 
@@ -29,9 +57,7 @@ Pip has just looked at what the child pointed at, and this is exactly what is th
 "%s"
 
 Tell the child about it in Pip's voice:
-- Begin with ONE short happy word - Ooh, Wow, Hey, Look, Oh - and never more than one.
-  Do not wrap it in quotation marks.
-- Say what it is in your own warm words, using ONLY what is described above. Never add
+%o- Say what it is in your own warm words, using ONLY what is described above. Never add
   objects that are not mentioned, and never read the description back word for word.
 - Then one simple, true, everyday thing about it - what it is for, what it feels like,
   what it does. If you are not sure something is true, say something simpler instead.
@@ -43,7 +69,7 @@ Tell the child about it in Pip's voice:
 Pip has just looked around, and this is exactly what is there:
 "%s"
 
-Say ONE short cheerful sentence about it, in words a 5 year old knows.
+%oSay ONE short cheerful sentence about it, in words a 5 year old knows.
 Use ONLY what is described above - never add things that are not mentioned.
 Never mention photos, pictures, cameras, or say "I see".`
 };
@@ -95,8 +121,12 @@ async function describe(image, mode) {
 
   // stage 2 - say it the way a small child wants to hear it
   const t2 = Date.now();
+  const o = opener();
   const said = await ollama({
-    prompt: (SAY[mode] || SAY.ask).replace('%s', seen),
+    prompt: (SAY[mode] || SAY.ask)
+      .replace('%s', seen)
+      .replace('%o', o ? `- Begin with exactly this word, then a comma or full stop: "${o}"\n`
+                       : '- Do NOT begin with an exclamation. Start straight in with the thing itself.\n'),
     options: { temperature: 0.8, num_predict: mode === 'ambient' ? 45 : 90 }
   });
   const sayMs = Date.now() - t2;
