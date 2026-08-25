@@ -44,26 +44,51 @@ The server warms the model on boot and holds it for 2 hours (`keep_alive`), and
 retries until Ollama answers — a cold load costs seconds you don't want a child
 waiting through.
 
+## Seeing and speaking are two separate jobs
+
+Asking one small model to identify an object *and* be charming *and* recall a fun
+fact made it worse at all three - it called a cat a grasshopper while trying to be
+playful, and told a child that tulips talk to each other through their roots.
+
+So each request runs two passes over `gemma3:4b`:
+
+1. **See** - a flat, factual prompt. No persona. "Name the single main thing. If you
+   are not certain of the exact kind, give the general kind." Temperature 0.2.
+2. **Say** - a text-only pass that turns that line into Pip's voice, and is told to
+   use *only* what stage 1 reported.
+
+Measured over the ten test images in `bench/images/`:
+
+| prompt style | identified correctly | invented facts |
+|---|---|---|
+| persona doing everything | 7/10 | many |
+| persona + hedging | ~5/10 | fewer |
+| **see-only (stage 1)** | **9/10** | n/a |
+| **two-stage (shipped)** | **9/10** | none seen |
+
+The one it still misses is a playground slide, read as a staircase or ladder.
+
 ## Measured latency
 
-Same 768px frame, warm model, `gemma3:4b`:
+`gemma3:4b`, two-stage, on an M3 Pro:
 
-| host | per frame | note |
-|---|---|---|
-| MacBook M3 Pro (Metal) | **2.5-3.2s** | current dev machine; ~3.2 GB resident |
-| RTX 5090 | 0.25s | ~10x faster; needs a dedicated always-on box |
+| | |
+|---|---|
+| first pass over 10 fresh images | 3.54s mean |
+| warm repeat requests | 1.34s mean |
 
-Output length barely matters — dropping `num_predict` 40 -> 15 moved 2.60s to
-2.53s. The cost is the vision encoder, not text generation, so smaller frames
-are the lever if this needs to get faster.
+Image size does not matter - 768px and 256px measured the same, because the cost is
+the vision encoder, not generation. Shorter output does not help either.
 
-Model footprints measured on the 5090:
+Models tried and rejected:
 
-| model | VRAM | latency |
-|---|---|---|
-| qwen2.5vl:3b | 5,768 MiB | 0.06s |
-| **gemma3:4b** | **5,082 MiB** | **0.25s** |
-| gemma3:12b | 11,544 MiB | 0.39s |
+| model | why not |
+|---|---|
+| `qwen2.5vl:3b` | slower than gemma over a real image set (4.09s vs 2.92s), looser with facts |
+| `qwen3-vl:4b` | a thinking model - reasoning eats the token budget, so replies come back empty unpredictably; 5.6s |
+| `llama3.2-vision:11b` | 11B, would be slower still |
+| Florence-2 | a captioner, not an instruct model - would need its own second stage |
+| MLX runtime | ~3x slower than Ollama in our harness, and needs transformers pinned |
 
 ## Tuning
 

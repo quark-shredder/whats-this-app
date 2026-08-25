@@ -8,26 +8,44 @@ const path = require('path');
 
 const PORT   = process.env.PORT   || 8080;
 const OLLAMA = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
-const MODEL  = process.env.MODEL  || 'qwen2.5vl:3b';
+const MODEL  = process.env.MODEL  || 'gemma3:4b';
 const WEB    = path.join(__dirname, '..', 'web');
 
 // Two prompts: a fuller answer when the child asks, a one-liner when we narrate.
-const PROMPTS = {
-  ask: `You are Pip, a bubbly, excitable little creature who is best friends with a child aged 4 to 7.
-The child just pointed at something and asked what it is.
+// Seeing and speaking are two different jobs. Asking one small model to do both at
+// once made it worse at both - it called a cat a grasshopper while trying to be
+// charming. So stage 1 only looks, and stage 2 only talks.
 
-- Start with an excited noise like "Wow!" or "Ooh!".
-- Say what the main thing is, in words a 5 year old knows.
-- Add ONE amazing true fact that would make a small child gasp.
-- Be silly and warm. Short sentences. Three at most.
-- Never mention photos, pictures, cameras, or say "I see" - just talk about the thing itself.
-- If something is unsafe for a child (a knife, a stove, a road), gently say to be careful near it.`,
+const SEE = `Look at this and answer in one short line, plainly and factually.
+Name the single main thing. If you are not certain of the exact kind, give the general
+kind instead - say "a flower", not a specific species you are unsure of.
+Then add 2 or 3 plain words about what it looks like.
+No excitement, no fun facts, no story. Just what is there.`;
 
-  ambient: `You are Pip, a bubbly little creature quietly pointing things out to a child aged 4 to 7.
+const SAY = {
+  ask: `You are Pip, a warm, playful little creature who is best friends with a child aged 4 to 7.
 
-- ONE short cheerful sentence about the most interesting thing in front of them.
-- Words a 5 year old knows. Sound delighted.
-- Never mention photos, pictures, cameras, or say "I see" - just name the thing.`
+Pip has just looked at what the child pointed at, and this is exactly what is there:
+"%s"
+
+Tell the child about it in Pip's voice:
+- Begin with ONE short happy word - Ooh, Wow, Hey, Look, Oh - and never more than one.
+  Do not wrap it in quotation marks.
+- Say what it is in your own warm words, using ONLY what is described above. Never add
+  objects that are not mentioned, and never read the description back word for word.
+- Then one simple, true, everyday thing about it - what it is for, what it feels like,
+  what it does. If you are not sure something is true, say something simpler instead.
+- Warm and playful. Short sentences. Three at most.
+- Never mention photos, pictures, cameras, or say "I see".`,
+
+  ambient: `You are Pip, a warm little creature quietly pointing things out to a child aged 4 to 7.
+
+Pip has just looked around, and this is exactly what is there:
+"%s"
+
+Say ONE short cheerful sentence about it, in words a 5 year old knows.
+Use ONLY what is described above - never add things that are not mentioned.
+Never mention photos, pictures, cameras, or say "I see".`
 };
 
 const MIME = {
@@ -54,26 +72,31 @@ function readBody(req, limit = 12 * 1024 * 1024) {
   });
 }
 
-async function describe(image, mode) {
+async function ollama(body) {
   const res = await fetch(`${OLLAMA}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: MODEL,
-      prompt: PROMPTS[mode] || PROMPTS.ask,
-      images: [image],
-      stream: false,
-      think: false,                       // ignored by non-thinking models
-      keep_alive: '2h',                   // stay resident: a cold load costs ~17s
-      options: {
-        temperature: 0.7,
-        num_predict: mode === 'ambient' ? 45 : 90
-      }
-    })
+    body: JSON.stringify(Object.assign({ model: MODEL, stream: false, think: false,
+                                         keep_alive: '2h' }, body))
   });
   if (!res.ok) throw new Error(`ollama ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  return (data.response || '').trim();
+  return ((await res.json()).response || '').trim();
+}
+
+async function describe(image, mode) {
+  // stage 1 - look, and only look
+  const seen = await ollama({
+    prompt: SEE, images: [image],
+    options: { temperature: 0.2, num_predict: 40 }
+  });
+  if (!seen) throw new Error('nothing seen');
+
+  // stage 2 - say it the way a small child wants to hear it
+  const said = await ollama({
+    prompt: (SAY[mode] || SAY.ask).replace('%s', seen),
+    options: { temperature: 0.8, num_predict: mode === 'ambient' ? 45 : 90 }
+  });
+  return { text: said || seen, seen };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -89,10 +112,10 @@ const server = http.createServer(async (req, res) => {
     try {
       const { image, mode } = JSON.parse(await readBody(req));
       if (!image) throw new Error('no image');
-      const text = await describe(image, mode);
-      console.log(`[${mode}] ${Date.now() - started}ms  ${text.slice(0, 70)}`);
+      const { text, seen } = await describe(image, mode);
+      console.log(`[${mode}] ${Date.now() - started}ms  saw="${seen}"  ->  ${text.slice(0, 60)}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ text, ms: Date.now() - started }));
+      return res.end(JSON.stringify({ text, seen, ms: Date.now() - started }));
     } catch (err) {
       console.error('describe failed:', err.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
