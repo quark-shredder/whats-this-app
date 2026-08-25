@@ -1,6 +1,7 @@
 // Caches the shell so the app opens instantly. Model calls always go to the network.
-const CACHE = 'whatsthis-v1';
-const SHELL = ['.', 'index.html', 'styles.css', 'app.js', 'icon.svg', 'manifest.webmanifest'];
+const CACHE = 'whatsthis-v2';
+const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest',
+               'icon-192.png', 'icon-512.png', 'icon.svg'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
