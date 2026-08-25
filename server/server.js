@@ -61,6 +61,7 @@ async function describe(image, mode) {
       images: [image],
       stream: false,
       think: false,                       // ignored by non-thinking models
+      keep_alive: '2h',                   // stay resident: a cold load costs ~17s
       options: {
         temperature: 0.7,
         num_predict: mode === 'ambient' ? 45 : 90
@@ -111,5 +112,18 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT, '0.0.0.0', () =>
-  console.log(`what's this? → http://0.0.0.0:${PORT}  (model: ${MODEL}, ollama: ${OLLAMA})`));
+// A 1x1 pixel is enough to make Ollama page the model into VRAM before
+// the first real question arrives.
+const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+async function warm() {
+  try {
+    const t = Date.now();
+    await describe(PIXEL, 'ambient');
+    console.log(`model warm in ${Date.now() - t}ms`);
+  } catch (err) { console.error('warm-up failed:', err.message); }
+}
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`what's this? → http://0.0.0.0:${PORT}  (model: ${MODEL}, ollama: ${OLLAMA})`);
+  warm();
+});
