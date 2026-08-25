@@ -38,14 +38,28 @@ The server warms the model on boot and holds it in VRAM for 2 hours
 (`keep_alive`). Without that, the first question after an idle period takes ~17s
 instead of ~0.6s.
 
-Expose it over HTTPS so Chrome will allow camera access (needs sudo, once):
+### HTTPS without root
+
+Chrome only grants camera access over HTTPS. `sudo tailscale serve` would be the
+obvious way to get a cert, but `tailscaled` gates both `serve` and `cert` behind
+root/operator, and we have no sudo on erhulk.
+
+The way around it: run a **second `tailscaled` in userspace mode, owned by `ubuntu`**.
+You own that daemon, so `serve` needs no root — and in userspace-networking mode
+binding :443 is not a privileged OS bind either. It joins the tailnet as its own
+node, `whats-this`, with its own Let's Encrypt cert.
 
 ```bash
-sudo tailscale serve --bg --https=443 http://127.0.0.1:8080
+/home/ubuntu/whats_this/start.sh     # starts app server + userspace tailscaled + serve
 ```
 
-Then on the child's phone: install Tailscale, join the tailnet, open
-`https://erhulk.tail4c7473.ts.net`, and use Chrome's **Add to Home screen**.
+`start.sh` is idempotent and wired to `@reboot` in the `ubuntu` crontab, so the
+whole thing comes back after a restart with no root involved.
+
+**Live at `https://whats-this.tail4c7473.ts.net`** (tailnet only).
+
+On the child's phone: install Tailscale, sign in to the tailnet, open that URL in
+Chrome, then **⋮ → Add to Home screen**.
 
 ## Measured latency (RTX 5090, 768px frames)
 
