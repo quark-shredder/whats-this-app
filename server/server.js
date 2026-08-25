@@ -115,12 +115,18 @@ const server = http.createServer(async (req, res) => {
 // A 1x1 pixel is enough to make Ollama page the model into VRAM before
 // the first real question arrives.
 const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-async function warm() {
+async function warm(attempt = 1) {
   try {
     const t = Date.now();
     await describe(PIXEL, 'ambient');
     console.log(`model warm in ${Date.now() - t}ms`);
-  } catch (err) { console.error('warm-up failed:', err.message); }
+  } catch (err) {
+    // On a reboot we usually start before Ollama's container is up, so keep
+    // trying rather than leaving the first real question to pay a cold load.
+    console.error(`warm-up attempt ${attempt} failed: ${err.message}`);
+    if (attempt < 60) setTimeout(() => warm(attempt + 1), 30000);
+    else console.error('giving up on warm-up; Ollama never came up');
+  }
 }
 
 server.listen(PORT, '0.0.0.0', () => {
