@@ -5,7 +5,9 @@ const video = $('video'), canvas = $('canvas'), tiny = $('tiny');
 const bubble = $('bubble'), bubbleText = $('bubbleText');
 const shutter = $('shutter'), pauseBtn = $('pause'), livedot = $('livedot');
 const thinking = $('thinking'), thinkingText = $('thinkingText');
+const bubbleWait = $('bubbleWait');
 const buddy = document.querySelector('.buddy'), buddyFace = $('buddyFace');
+const freeze = $('freeze');
 
 const AMBIENT_MS  = 5000;   // gap between automatic looks
 const DIFF_THRESH = 9;      // 0-255; below this the scene counts as "unchanged"
@@ -127,11 +129,21 @@ function setFace(mood) { buddyFace.src = `char/${FACES[mood]}.png`; }
 function startThinking() {
   buddy.classList.remove('happy');
   setFace('think');
-  thinkingText.textContent = pick(THINKING_WORDS);
   thinking.hidden = false;
+
+  // The waiting message goes in the caption bubble, so repeated taps reuse one
+  // bubble instead of it popping in and out under the child.
+  bubbleText.textContent = '';
+  thinkingText.textContent = pick(THINKING_WORDS).replace(/[.…]+$/, '');
+  bubbleWait.hidden = false;
+  $('replay').hidden = true;
+  bubble.hidden = false;
+
+  shutter.hidden = true;          // no button to hammer while Pip is looking
+
   clearInterval(thinkTimer);
   thinkTimer = setInterval(() => {
-    thinkingText.textContent = pick(THINKING_WORDS);
+    thinkingText.textContent = pick(THINKING_WORDS).replace(/[.…]+$/, '');
     setFace(Math.random() < 0.5 ? 'think' : 'curious');   // small glance, keeps it alive
   }, 1600);
 }
@@ -140,7 +152,6 @@ function startThinking() {
 function celebrate() {
   clearInterval(thinkTimer); thinkTimer = null;
   setFace('happy');
-  thinkingText.textContent = 'Got it!';
   buddy.classList.add('happy');
   setTimeout(() => { thinking.hidden = true; buddy.classList.remove('happy'); }, 900);
 }
@@ -148,6 +159,8 @@ function celebrate() {
 function stopThinking() {
   clearInterval(thinkTimer); thinkTimer = null;
   thinking.hidden = true;
+  bubbleWait.hidden = true;
+  shutter.hidden = false;
 }
 
 /* ── camera ─────────────────────────────────────────────── */
@@ -194,6 +207,12 @@ function sceneChanged() {
   return changed;
 }
 
+/* ── the frozen frame ───────────────────────────────────────
+   Hold the picture the child just took on screen, so they can keep
+   looking at the thing while Pip talks about it. */
+function holdFrame(dataUrl) { freeze.src = dataUrl; freeze.hidden = false; }
+function releaseFrame() { freeze.hidden = true; freeze.removeAttribute('src'); }
+
 /* ── the model call ─────────────────────────────────────── */
 async function describe(imageDataUrl, m) {
   const t0 = performance.now();
@@ -232,7 +251,12 @@ async function describe(imageDataUrl, m) {
 // wordAt maps a character offset back to its span.
 let wordSpans = [], wordStarts = [];
 
-function show(text) {
+function show(raw) {
+  // The model likes blank lines. white-space:pre on each word span would render
+  // them literally and blow holes in the caption, so flatten to single spaces.
+  const text = String(raw).replace(/\s+/g, ' ').trim();
+  bubbleWait.hidden = true;
+  $('replay').hidden = false;
   bubbleText.textContent = '';
   wordSpans = []; wordStarts = [];
   const re = /\S+\s*/g; let m;
@@ -256,17 +280,29 @@ function clearWords() { wordSpans.forEach(s => s.classList.remove('lit')); }
 
 /* ── ask mode: one tap, one answer ──────────────────────── */
 async function ask() {
-  if (busy) return;
-  busy = true; shutter.disabled = true;
-  bubble.hidden = true;
+  // Small children tap a big button many times. Extra taps are dropped, but
+  // Pip wiggles so the tap still feels like it did something.
+  if (busy) {
+    buddy.classList.remove('nudge');
+    void buddy.offsetWidth;           // restart the animation
+    buddy.classList.add('nudge');
+    setTimeout(() => buddy.classList.remove('nudge'), 450);
+    return;
+  }
+  busy = true;
+  releaseFrame();
   chime();                 // instant feedback on the tap itself
   startThinking();
   try {
     const full = grab(768, 0.7);
     if (!full) throw new Error('no frame');
+    holdFrame(full);       // the picture stays put while Pip thinks
     const text = await describe(full, 'ask');
     celebrate();
     show(text);
+    // Ready for the next picture as soon as the answer is here - making a child
+    // sit through the whole sentence before they can tap again is too long.
+    busy = false; shutter.hidden = false;
     save(grab(180, 0.5), text);
     await speak(text, lightWord);
     clearWords();
@@ -277,7 +313,9 @@ async function ask() {
     const oops = "Hmm, I couldn't see that. Let's try again!";
     show(oops); await speak(oops);
   } finally {
-    busy = false; shutter.disabled = false;
+    busy = false;
+    bubbleWait.hidden = true;
+    shutter.hidden = false;
   }
 }
 
@@ -303,6 +341,7 @@ async function ambientLoop() {
 
 async function startAmbient() {
   ambientOn = true; lastFrame = null;
+  releaseFrame();          // ambient watches the world live, never frozen
   livedot.hidden = false; pauseBtn.hidden = false; shutter.hidden = true;
   try { wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
   ambientLoop();
@@ -428,6 +467,7 @@ async function go(to, push = true) {
   }
   stopAmbient();
   stopThinking();
+  releaseFrame();
   speechSynthesis.cancel();
   bubble.hidden = true;
 

@@ -26,6 +26,7 @@
 <!-- ── camera (shared by ask + ambient) ────────────────── -->
 <section id="camera" class="screen">
   <video id="video" playsinline muted autoplay></video>
+  <img id="freeze" class="freeze" hidden alt="">
 
   <button class="back" data-go="home">←</button>
   <div id="livedot" class="livedot" hidden><span></span>Looking…</div>
@@ -37,15 +38,18 @@
       <img class="body"        src="char/green_body_squircle.png" alt="">
       <img class="face" id="buddyFace" src="char/face_h.png" alt="">
     </div>
-    <p id="thinkingText" class="thinking-text">Let me look…</p>
   </div>
 
-  <div id="bubble" class="bubble" hidden>
-    <p id="bubbleText"></p>
-    <button id="replay" class="replay" aria-label="Say it again">🔊</button>
-  </div>
-
-  <div class="controls">
+  <!-- caption and shutter share one row: the bubble is always the place
+       where status and answers appear, so it never jumps around -->
+  <div class="bottombar">
+    <div id="bubble" class="bubble" hidden>
+      <p id="bubbleText"></p>
+      <p id="bubbleWait" class="wait" hidden>
+        <span id="thinkingText">Let me look</span><i class="dots"><b>.</b><b>.</b><b>.</b></i>
+      </p>
+      <button id="replay" class="replay" aria-label="Say it again">🔊</button>
+    </div>
     <button id="shutter" class="shutter" aria-label="What's this?"><span>🔍</span></button>
     <button id="pause" class="pause" hidden>⏸︎</button>
   </div>
