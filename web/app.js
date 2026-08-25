@@ -4,6 +4,7 @@ const $ = id => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), tiny = $('tiny');
 const bubble = $('bubble'), bubbleText = $('bubbleText');
 const shutter = $('shutter'), pauseBtn = $('pause'), livedot = $('livedot');
+const thinking = $('thinking'), critter = $('critter'), thinkingText = $('thinkingText');
 
 const AMBIENT_MS  = 5000;   // gap between automatic looks
 const DIFF_THRESH = 9;      // 0-255; below this the scene counts as "unchanged"
@@ -44,6 +45,49 @@ function speak(text) {
     u.onend = u.onerror = () => resolve();
     speechSynthesis.speak(u);
   });
+}
+
+/* ── the wait ───────────────────────────────────────────────
+   Three seconds is a long time for a small child staring at a
+   frozen button, so we give them a friend to watch instead. */
+const CRITTERS = ['1f419', '1f996', '1f47e', '1f929', '1f440', '1f42c'];
+const THINKING_WORDS = [
+  'Let me look…', 'Ooh, what is it?', 'Thinking…',
+  'Looking closely…', 'Almost got it…', 'Hmm, interesting…'
+];
+let thinkTimer = null;
+
+// A soft two-note chime, synthesised so there is no audio file to ship.
+let audioCtx = null;
+function chime() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    [880, 1320].forEach((freq, i) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'sine'; o.frequency.value = freq;
+      const t0 = audioCtx.currentTime + i * 0.12;
+      g.gain.setValueAtTime(0, t0);
+      g.gain.linearRampToValueAtTime(0.22, t0 + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.35);
+      o.connect(g).connect(audioCtx.destination);
+      o.start(t0); o.stop(t0 + 0.4);
+    });
+  } catch (_) { /* audio is a bonus, never a blocker */ }
+}
+
+function startThinking() {
+  const pick = a => a[Math.floor(Math.random() * a.length)];
+  critter.src = `anim/${pick(CRITTERS)}.webp`;
+  thinkingText.textContent = pick(THINKING_WORDS);
+  thinking.hidden = false;
+  clearInterval(thinkTimer);
+  thinkTimer = setInterval(() => { thinkingText.textContent = pick(THINKING_WORDS); }, 1600);
+}
+
+function stopThinking() {
+  clearInterval(thinkTimer); thinkTimer = null;
+  thinking.hidden = true;
 }
 
 /* ── camera ─────────────────────────────────────────────── */
@@ -109,21 +153,25 @@ function show(text) {
 /* ── ask mode: one tap, one answer ──────────────────────── */
 async function ask() {
   if (busy) return;
-  busy = true; shutter.disabled = true; shutter.classList.add('thinking');
-  shutter.firstElementChild.textContent = '✨';
+  busy = true; shutter.disabled = true;
+  bubble.hidden = true;
+  chime();                 // instant feedback on the tap itself
+  startThinking();
   try {
     const full = grab(768, 0.7);
     if (!full) throw new Error('no frame');
     const text = await describe(full, 'ask');
+    stopThinking();
     show(text);
     save(grab(180, 0.5), text);
     await speak(text);
   } catch (err) {
+    stopThinking();
     const oops = "Hmm, I couldn't see that. Let's try again!";
     show(oops); await speak(oops);
   } finally {
-    busy = false; shutter.disabled = false; shutter.classList.remove('thinking');
-    shutter.firstElementChild.textContent = '🔍';
+    stopThinking();
+    busy = false; shutter.disabled = false;
   }
 }
 
@@ -191,6 +239,7 @@ function renderBook() {
 /* ── navigation ─────────────────────────────────────────── */
 async function go(to) {
   stopAmbient();
+  stopThinking();
   speechSynthesis.cancel();
   bubble.hidden = true;
 

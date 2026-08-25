@@ -4,3 +4,4 @@ bench/
 .DS_Store
 tts/
 ollama-local/
+mlx/
