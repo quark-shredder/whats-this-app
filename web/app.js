@@ -90,7 +90,11 @@ function speak(text, onWord) {
         }, 350);
       };
     }
-    const done = () => { clearInterval(fallback); resolve(); };
+    const done = () => {
+      clearInterval(fallback);
+      if (onWord) onWord(text.length);   // land on the final word, never mid-sentence
+      resolve();
+    };
     u.onend = u.onerror = done;
     speechSynthesis.speak(u);
   });
@@ -350,6 +354,10 @@ function show(raw) {
     wordSpans.push(span); wordStarts.push(m.index);
   }
   bubble.hidden = false;
+  // Hand back the normalised string. Speaking the raw text instead would drift:
+  // the engine reports charIndex against what it was given, and every collapsed
+  // run of whitespace would push the highlight further behind the voice.
+  return text;
 }
 
 function lightWord(charIndex) {
@@ -388,12 +396,12 @@ async function ask() {
     flyToStack(full);      // the shot lands on the stack, camera stays visible
     const text = await describe(full, 'ask');
     celebrate();
-    show(text);
+    const spoken = show(text);
     // Ready for the next picture as soon as the answer is here - making a child
     // sit through the whole sentence before they can tap again is too long.
     busy = false; shutter.hidden = false;
     save(grab(180, 0.5, CROP_W, CROP_H), text);
-    await speak(text, lightWord);
+    await speak(spoken, lightWord);
     clearWords();
     pipTo('idle'); startIdleSway();
   } catch (err) {
@@ -401,7 +409,7 @@ async function ask() {
     bar.hidden = true;
     setFace('oops'); setTimeout(() => setFace('curious'), 1500);
     const oops = "Hmm, I couldn't see that. Let's try again!";
-    show(oops); await speak(oops);
+    await speak(show(oops));
   } finally {
     busy = false;
     bar.hidden = true;
@@ -418,9 +426,9 @@ async function ambientLoop() {
         if (full) {
           const text = await describe(full, 'ambient');
           if (!ambientOn) break;
-          show(text);
-          save(grab(180, 0.5, CROP_W, CROP_H), text);
-          await speak(text, lightWord); // next look waits until this finishes
+          const spoken = show(text);
+          save(grab(180, 0.5, 1, 1), text);          // ambient saves the whole scene
+          await speak(spoken, lightWord); // next look waits until this finishes
           clearWords();
         }
       } catch (_) { /* a dropped frame is not worth telling a child about */ }
@@ -442,6 +450,74 @@ function stopAmbient() {
   livedot.hidden = true; pauseBtn.hidden = true; shutter.hidden = false;
   if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
 }
+
+/* ── swipe the picture away ─────────────────────────────────
+   Flick the photo sideways and it sails off, taking the caption with it and
+   leaving a clean camera again. A whole-hand gesture is easier for a small
+   child than finding a close button. */
+function resetToFresh() {
+  speechSynthesis.cancel();
+  clearInterval(thinkTimer); thinkTimer = null;
+  bar.hidden = true;
+  bubble.hidden = true;
+  bubbleText.textContent = '';
+  wordSpans = []; wordStarts = [];
+  clearStack();
+  cameraScreen.classList.add('fresh');
+  shutter.hidden = false;
+  setFace('curious');
+  pipTo('idle'); startIdleSway();
+}
+
+(function enableSwipe() {
+  let startX = 0, startY = 0, dx = 0, dragging = false, decided = false;
+
+  const finish = fling => {
+    photo.style.transition = 'transform .32s ease-out, opacity .32s ease-out';
+    if (fling) {
+      const dir = dx < 0 ? -1 : 1;
+      photo.style.transform = `translateX(${dir * window.innerWidth}px) rotate(${dir * 18}deg)`;
+      photo.style.opacity = '0';
+      setTimeout(() => {
+        photo.style.transition = photo.style.transform = photo.style.opacity = '';
+        resetToFresh();
+      }, 320);
+    } else {
+      photo.style.transform = '';
+      setTimeout(() => { photo.style.transition = ''; }, 320);
+    }
+  };
+
+  photo.addEventListener('pointerdown', e => {
+    if (photo.hidden) return;
+    dragging = true; decided = false; dx = 0;
+    startX = e.clientX; startY = e.clientY;
+    photo.style.transition = 'none';
+    photo.setPointerCapture(e.pointerId);
+  });
+
+  photo.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    // Let a vertical drag scroll the page rather than stealing it as a swipe.
+    if (!decided) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      decided = true;
+      if (Math.abs(dy) > Math.abs(dx)) { dragging = false; photo.style.transition = ''; return; }
+    }
+    photo.style.transform = `translateX(${dx}px) rotate(${dx / 22}deg)`;
+    photo.style.opacity = String(Math.max(0.35, 1 - Math.abs(dx) / 340));
+  });
+
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    finish(Math.abs(dx) > 90);           // a small flick is enough
+  };
+  photo.addEventListener('pointerup', end);
+  photo.addEventListener('pointercancel', end);
+})();
 
 /* ── history ────────────────────────────────────────────── */
 function load() { try { return JSON.parse(localStorage.getItem('whatsthis') || '[]'); } catch { return []; } }
@@ -582,6 +658,9 @@ async function go(to, push = true) {
 }
 
 document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
+photo.addEventListener('click', () => {
+  if (bubbleText.textContent.trim()) speak(bubbleText.textContent, lightWord).then(clearWords);
+});
 
 // Android's back button (and the browser's) moves within the app.
 history.replaceState({ screen: 'home' }, '');
