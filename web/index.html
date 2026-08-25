@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#1b1033">
+<title>What's this?</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ── home ───────────────────────────────────────────── -->
+<section id="home" class="screen active">
+  <h1 class="logo">What's this?</h1>
+  <div class="menu">
+    <button class="tile tile-ask"     data-go="ask">     <span class="emoji">🔍</span><span>What's this?</span></button>
+    <button class="tile tile-ambient" data-go="ambient"> <span class="emoji">👀</span><span>Look Around</span></button>
+    <button class="tile tile-book"    data-go="book">    <span class="emoji">📖</span><span>My Book</span></button>
+  </div>
+</section>
+
+<!-- ── camera (shared by ask + ambient) ────────────────── -->
+<section id="camera" class="screen">
+  <video id="video" playsinline muted autoplay></video>
+
+  <button class="back" data-go="home">←</button>
+  <div id="livedot" class="livedot" hidden><span></span>Looking…</div>
+
+  <div id="bubble" class="bubble" hidden>
+    <p id="bubbleText"></p>
+    <button id="replay" class="replay" aria-label="Say it again">🔊</button>
+  </div>
+
+  <div class="controls">
+    <button id="shutter" class="shutter" aria-label="What's this?"><span>🔍</span></button>
+    <button id="pause" class="pause" hidden>⏸︎</button>
+  </div>
+</section>
+
+<!-- ── history ────────────────────────────────────────── -->
+<section id="book" class="screen">
+  <button class="back" data-go="home">←</button>
+  <h2 class="booktitle">📖 My Book</h2>
+  <div id="grid" class="grid"></div>
+  <p id="empty" class="empty" hidden>Nothing here yet!<br><small>Go find something 🔍</small></p>
+</section>
+
+<canvas id="canvas" hidden></canvas>
+<canvas id="tiny" width="16" height="16" hidden></canvas>
+
+<script src="app.js"></script>
+</body>
+</html>
