@@ -14,13 +14,23 @@ let stream = null, busy = false, ambientOn = false, wakeLock = null;
 let lastFrame = null;       // 16x16 grayscale of the last frame we described
 
 /* ── voice ─────────────────────────────────────────────────
-   Everything speaks through here. To swap in a cloud voice
-   later, replace the body of speak() and nothing else changes. */
+   Everything speaks through here. To swap in a cloud or
+   self-hosted voice later, replace the body of speak() and
+   nothing else in the app changes. */
+const VOICE_LANG = 'en-IN';   // Indian English; falls back to any English voice
+const VOICE_RATE = 0.8;       // slower than default — a 4-7 year old needs the gaps
+const VOICE_PITCH = 1.1;
+
 let voice = null;
 function pickVoice() {
-  const vs = speechSynthesis.getVoices().filter(v => v.lang.startsWith('en'));
-  voice = vs.find(v => /female|samantha|karen|zira|google uk english female/i.test(v.name))
-       || vs.find(v => /google/i.test(v.name)) || vs[0] || null;
+  const all = speechSynthesis.getVoices();
+  // Prefer an Indian English voice, then any English one.
+  const indian  = all.filter(v => v.lang.replace('_', '-') === VOICE_LANG);
+  const english = all.filter(v => v.lang.startsWith('en'));
+  const pool = indian.length ? indian : english;
+  voice = pool.find(v => /female|neural|natural/i.test(v.name))
+       || pool.find(v => /google/i.test(v.name)) || pool[0] || null;
+  if (voice) console.log('voice:', voice.name, voice.lang);
 }
 speechSynthesis.onvoiceschanged = pickVoice; pickVoice();
 
@@ -29,8 +39,8 @@ function speak(text) {
     if (!text || !('speechSynthesis' in window)) return resolve();
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    if (voice) u.voice = voice;
-    u.rate = 0.92; u.pitch = 1.15;
+    if (voice) { u.voice = voice; u.lang = voice.lang; }
+    u.rate = VOICE_RATE; u.pitch = VOICE_PITCH;
     u.onend = u.onerror = () => resolve();
     speechSynthesis.speak(u);
   });
