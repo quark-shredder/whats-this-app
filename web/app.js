@@ -573,4 +573,28 @@ $('replay').onclick = () => speak(bubbleText.textContent, lightWord).then(clearW
 // Pause everything when the app goes to the background.
 document.addEventListener('visibilitychange', () => { if (document.hidden) { stopAmbient(); speechSynthesis.cancel(); } });
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+/* ── keeping itself up to date ───────────────────────────────
+   Installed to the home screen there is no address bar and the body does not
+   scroll, so there is no reload gesture at all. The app therefore checks for a
+   new version itself and swaps to it when the child is not mid-sentence. */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    const check = () => reg.update().catch(() => {});
+    check();
+    setInterval(check, 5 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+  }).catch(() => {});
+
+  // A new worker taking control means new files are live; reload to pick them
+  // up, but never while Pip is mid-answer.
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading) return;
+    reloading = true;
+    const whenIdle = () => {
+      if (busy || speechSynthesis.speaking) return setTimeout(whenIdle, 1000);
+      location.reload();
+    };
+    whenIdle();
+  });
+}
