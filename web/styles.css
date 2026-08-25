@@ -1,6 +1,14 @@
 :root{
-  --bg:#1b1033; --card:#2a1b4d; --ink:#fff;
-  --ask:#ffb703; --ambient:#00c9a7; --book:#ff5d8f;
+  /* warm, light, made for small children */
+  --cream:#fffbf1;      /* ground */
+  --butter:#fff2d0;     /* raised surfaces */
+  --blush:#ffb2b2;      /* soft accent */
+  --coral:#e36a6a;      /* the one strong colour - the camera button, the lit word */
+
+  --bg:var(--cream); --card:var(--butter);
+  --ink:#5a3330;        /* warm dark brown, not black - reads softer on cream */
+  --ink-2:#96706a;
+  --ask:var(--coral); --ambient:var(--blush); --book:var(--butter);
   --pad: env(safe-area-inset-bottom, 0px);
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -10,7 +18,9 @@
 html,body{height:100%;overflow:hidden}
 body{
   background:var(--bg); color:var(--ink);
-  font:600 18px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  /* Andika is drawn for beginning readers - single-storey a, distinct l and I -
+     which matters when a 5 year old is following the words being read aloud. */
+  font:400 18px/1.45 "Andika",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   user-select:none;
 }
 .screen{position:fixed;inset:0;display:none;flex-direction:column}
@@ -20,81 +30,173 @@ body{
 .logo{
   text-align:center;font-size:2.6rem;font-weight:800;letter-spacing:-.02em;
   padding:max(28px,var(--pad)) 16px 8px;
-  background:linear-gradient(90deg,var(--ask),var(--book),var(--ambient));
-  -webkit-background-clip:text;background-clip:text;color:transparent;
+  color:var(--coral);
 }
 .menu{flex:1;display:flex;flex-direction:column;gap:16px;padding:16px;justify-content:center}
 .tile{
-  flex:1;max-height:190px;border:0;border-radius:28px;color:#1b1033;
+  flex:1;max-height:190px;border:0;border-radius:28px;color:var(--ink);
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
-  font:800 1.5rem/1 system-ui,sans-serif;
-  box-shadow:0 8px 0 rgba(0,0,0,.25);transition:transform .1s,box-shadow .1s;
+  font:700 1.45rem/1.15 "Andika",system-ui,sans-serif;
+  box-shadow:0 6px 0 rgba(160,90,80,.22);transition:transform .1s,box-shadow .1s;
 }
-.tile:active{transform:translateY(6px);box-shadow:0 2px 0 rgba(0,0,0,.25)}
+.tile:active{transform:translateY(5px);box-shadow:0 1px 0 rgba(160,90,80,.22)}
 .tile .emoji{font-size:3.4rem;line-height:1}
-.tile-ask{background:var(--ask)}
-.tile-ambient{background:var(--ambient)}
-.tile-book{background:var(--book);max-height:130px}
+.tile-ask{background:var(--coral);color:var(--cream)}
+.tile-ambient{background:var(--blush)}
+.tile-book{background:var(--butter);max-height:130px}
 
 /* ── camera ─────────────────────────────── */
 #video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+
+/* Pip only looks at the middle of the frame, so show the child where that is.
+   Cropping is what fixed the cluttered-scene problem; the brackets teach the aim. */
+.aim{
+  /* exactly what gets cropped and sent: a centred square, 65% of the short side */
+  position:absolute;left:50%;top:42%;
+  width:min(65vw,65vh);height:min(65vw,65vh);
+  transform:translate(-50%,-50%);
+  z-index:2;pointer-events:none;border-radius:18px;
+  box-shadow:0 0 0 2px rgba(227,106,106,.7) inset;
+  animation:breathe 3s ease-in-out infinite;
+}
+.aim::before,.aim::after{
+  content:"";position:absolute;inset:-1px;border-radius:18px;
+  border:2px dashed rgba(255,251,241,.75);
+}
+@keyframes breathe{50%{opacity:.55}}
+
 .back{
-  position:absolute;top:max(14px,var(--pad));left:14px;z-index:5;
+  position:absolute;top:max(14px,var(--pad));left:14px;z-index:8;
   width:52px;height:52px;border:0;border-radius:50%;
-  background:rgba(0,0,0,.5);color:#fff;font-size:1.6rem;backdrop-filter:blur(6px);
+  background:rgba(255,251,241,.9);color:var(--ink);font-size:1.6rem;backdrop-filter:blur(6px);
 }
 .livedot{
-  position:absolute;top:max(20px,var(--pad));left:50%;transform:translateX(-50%);z-index:5;
+  position:absolute;top:max(20px,var(--pad));left:50%;transform:translateX(-50%);z-index:8;
   display:flex;align-items:center;gap:8px;padding:8px 16px;border-radius:99px;
-  background:rgba(0,0,0,.5);font-size:.95rem;backdrop-filter:blur(6px);
+  background:rgba(255,251,241,.9);color:var(--ink);font-size:.95rem;backdrop-filter:blur(6px);
 }
-.livedot span{width:10px;height:10px;border-radius:50%;background:#ff4d4d;animation:pulse 1.2s infinite}
+.livedot span{width:10px;height:10px;border-radius:50%;background:var(--coral);animation:pulse 1.2s infinite}
 @keyframes pulse{50%{opacity:.25}}
 
-/* caption and button live on one row, so the button never sits under a
-   bubble that changes height as the text changes */
-.bottombar{
-  position:absolute;left:0;right:0;bottom:0;z-index:5;
-  display:flex;align-items:flex-end;gap:12px;
-  padding:0 14px calc(20px + var(--pad));
+/* the shot, flying from full frame down onto the stack */
+.flyer{
+  position:absolute;z-index:7;object-fit:cover;border-radius:14px;
+  pointer-events:none;box-shadow:0 12px 30px rgba(0,0,0,.5);
+}
+
+/* ── the bottom furniture ───────────────── */
+.hud{
+  position:absolute;left:0;right:0;bottom:0;z-index:6;
+  display:flex;flex-direction:column;align-items:stretch;gap:8px;
+  padding:0 14px calc(12px + var(--pad));
   pointer-events:none;
 }
-.bottombar > *{pointer-events:auto}
+.hud > *{pointer-events:auto}
 
+/* photo stack - the shot just taken, sitting on the ones before it */
+.photo{
+  position:relative;height:22vh;border:0;background:none;padding:0;
+  align-self:center;width:min(46vw,220px);
+}
+.photo .card{
+  position:absolute;inset:0;border-radius:14px;
+  box-shadow:0 5px 14px rgba(90,51,48,.35);
+}
+.photo .back2{background:var(--blush);transform:rotate(-6deg) scale(.92);opacity:.5}
+.photo .back1{background:var(--butter);transform:rotate(3.5deg) scale(.96);opacity:.75}
+.photo .shot{width:100%;height:100%;object-fit:cover;background:var(--butter)}
+.photo:active .shot{transform:scale(.97)}
+
+/* caption - half the height it was, and it scrolls itself as Pip reads */
 .bubble{
-  flex:1;min-width:0;position:relative;
-  background:rgba(255,255,255,.96);color:#1b1033;
-  border-radius:24px;padding:16px 56px 16px 20px;
-  box-shadow:0 10px 30px rgba(0,0,0,.4);
+  position:relative;
+  background:var(--cream);color:var(--ink);
+  border-radius:20px;padding:10px 52px 10px 16px;
+  box-shadow:0 8px 24px rgba(90,51,48,.3);
   animation:pop .25s ease-out;
 }
-@keyframes pop{from{transform:scale(.96) translateY(8px);opacity:0}}
-.bubble p{font-size:1.3rem;font-weight:700;line-height:1.35}
+@keyframes pop{from{transform:scale(.97) translateY(6px);opacity:0}}
+.captiontext{
+  max-height:11vh;overflow-y:auto;scrollbar-width:none;
+  font-size:1.22rem;font-weight:700;line-height:1.34;
+  overscroll-behavior:contain;
+}
+.captiontext::-webkit-scrollbar{display:none}
 .replay{
-  position:absolute;right:12px;top:50%;transform:translateY(-50%);
-  width:42px;height:42px;border:0;border-radius:50%;background:#ffb703;font-size:1.2rem;
+  position:absolute;right:10px;top:50%;transform:translateY(-50%);
+  width:40px;height:40px;border:0;border-radius:50%;background:var(--blush);color:var(--ink);font-size:1.1rem;
 }
 
-/* the waiting state lives in the same bubble, so back-to-back taps
-   reuse one caption instead of the bubble popping in and out */
-.wait{display:flex;align-items:center;gap:2px;opacity:.75}
-.dots{display:inline-flex;gap:3px;margin-left:2px;font-style:normal}
-.dots b{animation:blip 1.1s infinite}
-.dots b:nth-child(2){animation-delay:.16s}
-.dots b:nth-child(3){animation-delay:.32s}
-@keyframes blip{0%,60%,100%{opacity:.25}30%{opacity:1}}
+/* a moving bar, so waiting reads as progress rather than a stuck app */
+.bar{
+  position:absolute;left:16px;right:16px;top:0;height:4px;
+  border-radius:0 0 4px 4px;background:rgba(227,106,106,.15);overflow:hidden;
+}
+.bar i{
+  position:absolute;inset:0;display:block;border-radius:inherit;
+  background:linear-gradient(90deg,var(--butter),var(--blush),var(--coral));
+  animation:sweep 1.25s ease-in-out infinite;
+}
+@keyframes sweep{
+  0%  {transform:translateX(-100%) scaleX(.45)}
+  50% {transform:translateX(0)     scaleX(.7)}
+  100%{transform:translateX(100%)  scaleX(.45)}
+}
 
+.btnrow{display:flex;align-items:center;justify-content:center;gap:14px;padding-top:2px}
 .shutter{
-  flex:0 0 auto;
-  width:82px;height:82px;border-radius:50%;border:5px solid rgba(255,255,255,.85);
-  background:var(--ask);font-size:2rem;box-shadow:0 6px 24px rgba(0,0,0,.45);
-  transition:transform .12s, opacity .15s;
+  width:76px;height:76px;border-radius:50%;border:5px solid var(--cream);
+  background:var(--coral);color:var(--cream);
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 6px 20px rgba(90,51,48,.4);transition:transform .12s;
 }
+.shutter svg{width:34px;height:34px}
 .shutter:active{transform:scale(.92)}
+/* bigger and alone until the first picture is taken */
+.screen.fresh .shutter{width:96px;height:96px}
+.screen.fresh .shutter svg{width:44px;height:44px}
 .pause{
-  flex:0 0 auto;
-  width:64px;height:64px;border-radius:50%;border:0;
-  background:rgba(0,0,0,.55);color:#fff;font-size:1.5rem;backdrop-filter:blur(6px);
+  width:60px;height:60px;border-radius:50%;border:0;
+  background:rgba(255,251,241,.9);color:var(--ink);font-size:1.4rem;backdrop-filter:blur(6px);
+}
+
+/* ── Pip ─────────────────────────────────
+   Half his old size, drifting around the live area. He is moved by JS so he
+   can be kept clear of the caption and the aim brackets. */
+.buddy{
+  position:absolute;width:48px;height:48px;z-index:5;
+  left:0;top:0;pointer-events:none;
+  transition:transform 1.6s cubic-bezier(.34,1.2,.5,1);
+  filter:drop-shadow(0 8px 12px rgba(0,0,0,.5));
+}
+.buddy .body{position:absolute;inset:0;width:100%;height:100%;z-index:1;
+  animation:bob .9s ease-in-out infinite}
+.buddy .face{
+  position:absolute;z-index:2;width:68.75%;height:68.75%;left:15.6%;top:15%;
+  animation:blink 3.4s infinite;
+}
+.buddy .hand{position:absolute;width:19px;height:19px;bottom:9px;z-index:3}
+.hand-l{left:-11px;transform-origin:75% 40%;animation:waveL .9s ease-in-out infinite}
+.hand-r{right:-11px;transform-origin:25% 40%;animation:waveR .9s ease-in-out infinite}
+
+@keyframes bob{0%,100%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-7px) rotate(2deg)}}
+@keyframes waveL{0%,100%{transform:rotate(-14deg)}50%{transform:rotate(-42deg) translateY(-4px)}}
+@keyframes waveR{0%,100%{transform:rotate(14deg)}50%{transform:rotate(42deg) translateY(-4px)}}
+@keyframes blink{0%,94%,100%{opacity:1}96%{opacity:.82}}
+
+/* words light up as they are spoken */
+.captiontext .word{
+  display:inline-block;white-space:pre;
+  transition:color .12s ease, transform .12s ease;
+}
+.captiontext .word.lit{
+  color:var(--coral);transform:translateY(-2px) scale(1.1);
+  text-shadow:0 2px 0 rgba(255,178,178,.55);
+}
+
+@media (prefers-reduced-motion: reduce){
+  .buddy,.buddy .hand,.buddy .face,.aim,.bar i{animation:none}
+  .captiontext .word.lit{transform:none}
 }
 
 /* ── book ───────────────────────────────── */
@@ -102,92 +204,12 @@ body{
 .grid{flex:1;overflow-y:auto;display:grid;grid-template-columns:1fr;gap:12px;padding:8px 14px 30px}
 .card{
   display:flex;gap:14px;align-items:center;
-  background:var(--card);border:0;border-radius:20px;padding:12px;text-align:left;color:var(--ink);
+  background:var(--butter);border:0;border-radius:20px;padding:12px;text-align:left;color:var(--ink);
 }
 .card:active{transform:scale(.98)}
 .card img{width:84px;height:84px;object-fit:cover;border-radius:14px;flex-shrink:0}
 .card p{font-size:1.05rem;font-weight:600;line-height:1.35}
 .empty{text-align:center;padding:60px 20px;opacity:.6;font-size:1.3rem}
-
-/* ── Pip, the thinking buddy ─────────────────
-   Composed from Kenney's CC0 Shape Characters: a body, a face that
-   changes with what Pip is doing, and two hands that wave. Built from
-   parts rather than one canned loop so it can react. */
-.thinking{
-  position:absolute;left:0;right:0;bottom:130px;z-index:4;
-  display:flex;justify-content:center;
-  pointer-events:none;
-}
-.buddy{
-  position:relative;width:96px;height:96px;
-  animation:bob .9s ease-in-out infinite;
-  filter:drop-shadow(0 12px 16px rgba(0,0,0,.5));
-}
-.buddy .body{position:absolute;inset:0;width:100%;height:100%;z-index:1}
-/* the face art is 110px against a 160px body - keep that ratio or it spills */
-.buddy .face{
-  position:absolute;z-index:2;
-  width:68.75%;height:68.75%;
-  left:15.6%;top:15%;
-  animation:blink 3.4s infinite;
-}
-/* hands sit in front of the body so they read as hands, not stubs */
-.buddy .hand{position:absolute;width:36px;height:36px;bottom:17px;z-index:3}
-.hand-l{left:-21px;transform-origin:75% 40%;animation:waveL .9s ease-in-out infinite}
-.hand-r{right:-21px;transform-origin:25% 40%;animation:waveR .9s ease-in-out infinite}
-
-@keyframes bob{
-  0%,100%{transform:translateY(0) rotate(-2deg)}
-  50%    {transform:translateY(-14px) rotate(2deg)}
-}
-@keyframes waveL{
-  0%,100%{transform:rotate(-14deg) translateY(0)}
-  50%    {transform:rotate(-42deg) translateY(-8px)}
-}
-@keyframes waveR{
-  0%,100%{transform:rotate(14deg) translateY(0)}
-  50%    {transform:rotate(42deg) translateY(-8px)}
-}
-@keyframes blink{0%,94%,100%{opacity:1}96%{opacity:.82}}
-
-/* Pip is delighted when the answer arrives */
-.buddy.happy{animation:cheer .55s ease-out}
-@keyframes cheer{
-  0%  {transform:scale(1) rotate(0)}
-  40% {transform:scale(1.18) rotate(-6deg)}
-  70% {transform:scale(.96) rotate(4deg)}
-  100%{transform:scale(1) rotate(0)}
-}
-
-.thinking-text{
-  background:rgba(0,0,0,.55);backdrop-filter:blur(6px);
-  padding:10px 20px;border-radius:99px;
-  font-size:1.25rem;font-weight:700;color:#fff;
-  animation:breathe 1.6s ease-in-out infinite;
-}
-@keyframes breathe{50%{opacity:.6;transform:scale(.97)}}
-
-@media (prefers-reduced-motion: reduce){
-  .buddy,.buddy .hand,.buddy .face,.thinking-text{animation:none}
-}
-
-/* ── words light up as they are spoken ──────
-   A 4-7 year old is learning to read. Tying each word to the moment
-   it is heard turns listening into reading practice. */
-.bubble .word{
-  display:inline-block;
-  white-space:pre;          /* each span carries its trailing space - inline-block would eat it */
-  transition:color .12s ease, transform .12s ease;
-}
-.bubble .word.lit{
-  color:#e8590c;
-  transform:translateY(-3px) scale(1.12);
-  text-shadow:0 2px 0 rgba(255,183,3,.35);
-}
-@media (prefers-reduced-motion: reduce){
-  .bubble .word{transition:color .12s ease}
-  .bubble .word.lit{transform:none}
-}
 
 /* ── voice settings ─────────────────────────
    For the grown-up, not the child: pick the voice on the actual
@@ -195,20 +217,20 @@ body{
 .gear{
   position:absolute;top:max(14px,var(--pad));right:14px;
   width:46px;height:46px;border:0;border-radius:50%;
-  background:rgba(255,255,255,.12);font-size:1.3rem;
+  background:var(--butter);color:var(--ink);font-size:1.3rem;
 }
 .settings{flex:1;overflow-y:auto;padding:6px 18px 30px}
 .settings .row{display:block;margin:0 0 18px}
 .settings .row span{display:block;font-size:1rem;margin-bottom:6px;opacity:.85}
-.settings .row b{color:var(--ask)}
-.settings input[type=range]{width:100%;height:34px;accent-color:var(--ask)}
+.settings .row b{color:var(--coral)}
+.settings input[type=range]{width:100%;height:34px;accent-color:var(--coral)}
 .hint{opacity:.6;font-size:.9rem;margin:4px 0 10px}
 .voicelist{display:flex;flex-direction:column;gap:8px}
 .vbtn{
   border:0;border-radius:14px;padding:13px 15px;text-align:left;
-  background:var(--card);color:var(--ink);font-size:1rem;font-weight:600;
+  background:var(--butter);color:var(--ink);font-size:1rem;font-weight:700;
 }
-.vbtn.sel{background:var(--ask);color:#1b1033}
+.vbtn.sel{background:var(--coral);color:var(--cream)}
 .vbtn small{display:block;opacity:.65;font-weight:500;font-size:.82rem;margin-top:2px}
 .vbtn.sel small{opacity:.8}
 
@@ -216,28 +238,16 @@ body{
 .chips{display:flex;gap:8px;margin:0 0 12px}
 .chip{
   flex:1;border:0;border-radius:99px;padding:10px 6px;
-  background:rgba(255,255,255,.12);color:var(--ink);
-  font:700 .92rem system-ui,sans-serif;
+  background:var(--butter);color:var(--ink);
+  font:700 .92rem "Andika",system-ui,sans-serif;
 }
-.chip.on{background:var(--ambient);color:#1b1033}
+.chip.on{background:var(--coral);color:var(--cream)}
 .gtag{opacity:.75;font-weight:700;margin-left:4px}
 
-/* ── the frozen frame ───────────────────────
-   When the child taps, we hold the picture they took on screen so they
-   can keep looking at the thing Pip is talking about, instead of the
-   camera drifting off it. */
-.freeze{
-  position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
-  z-index:1;animation:snap .28s ease-out;
-}
-@keyframes snap{
-  0%  {opacity:.35;transform:scale(1.04)}
-  100%{opacity:1;transform:scale(1)}
-}
 /* a tap that arrives while Pip is still busy gets a nudge, not silence */
-.buddy.nudge{animation:nudge .4s ease-out}
+.buddy.nudge .face{animation:nudge .45s ease-out}
 @keyframes nudge{
-  0%,100%{transform:translateX(0) rotate(0)}
-  25%    {transform:translateX(-8px) rotate(-5deg)}
-  75%    {transform:translateX(8px) rotate(5deg)}
+  0%,100%{transform:translateX(0)}
+  25%    {transform:translateX(-5px)}
+  75%    {transform:translateX(5px)}
 }

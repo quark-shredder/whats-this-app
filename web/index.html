@@ -3,11 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#1b1033">
+<meta name="theme-color" content="#fffbf1">
 <title>What's this?</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg">
 <link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="fonts/andika.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -16,7 +17,7 @@
 <section id="home" class="screen active">
   <h1 class="logo">What's this?</h1>
   <div class="menu">
-    <button class="tile tile-ask"     data-go="ask">     <span class="emoji">🔍</span><span>What's this?</span></button>
+    <button class="tile tile-ask"     data-go="ask">     <span class="emoji">📷</span><span>What's this?</span></button>
     <button class="tile tile-ambient" data-go="ambient"> <span class="emoji">👀</span><span>Look Around</span></button>
     <button class="tile tile-book"    data-go="book">    <span class="emoji">📖</span><span>My Book</span></button>
   </div>
@@ -26,32 +27,46 @@
 <!-- ── camera (shared by ask + ambient) ────────────────── -->
 <section id="camera" class="screen">
   <video id="video" playsinline muted autoplay></video>
-  <img id="freeze" class="freeze" hidden alt="">
+
+  <!-- brackets mark the middle of the frame - the only part Pip actually looks at -->
+  <div id="aim" class="aim"></div>
+
+  <!-- the shot flies from full screen down onto the stack -->
+  <img id="flyer" class="flyer" hidden alt="">
 
   <button class="back" data-go="home">←</button>
   <div id="livedot" class="livedot" hidden><span></span>Looking…</div>
 
-  <div id="thinking" class="thinking" hidden>
-    <div class="buddy">
-      <img class="hand hand-l" src="char/green_hand_open.png" alt="">
-      <img class="hand hand-r" src="char/green_hand_open.png" alt="">
-      <img class="body"        src="char/green_body_squircle.png" alt="">
-      <img class="face" id="buddyFace" src="char/face_h.png" alt="">
-    </div>
+  <div class="buddy" id="pip">
+    <img class="hand hand-l" src="char/pink_hand_open.png" alt="">
+    <img class="hand hand-r" src="char/pink_hand_open.png" alt="">
+    <img class="body"        src="char/pink_body_squircle.png" alt="">
+    <img class="face" id="buddyFace" src="char/face_h.png" alt="">
   </div>
 
-  <!-- caption and shutter share one row: the bubble is always the place
-       where status and answers appear, so it never jumps around -->
-  <div class="bottombar">
+  <div class="hud">
+    <button id="photo" class="photo" hidden aria-label="Say it again">
+      <span class="card back2"></span>
+      <span class="card back1"></span>
+      <img id="shot" class="card shot" alt="">
+    </button>
+
     <div id="bubble" class="bubble" hidden>
-      <p id="bubbleText"></p>
-      <p id="bubbleWait" class="wait" hidden>
-        <span id="thinkingText">Let me look</span><i class="dots"><b>.</b><b>.</b><b>.</b></i>
-      </p>
+      <div id="bar" class="bar" hidden><i></i></div>
+      <p id="bubbleText" class="captiontext"></p>
       <button id="replay" class="replay" aria-label="Say it again">🔊</button>
     </div>
-    <button id="shutter" class="shutter" aria-label="What's this?"><span>🔍</span></button>
-    <button id="pause" class="pause" hidden>⏸︎</button>
+
+    <div class="btnrow">
+      <button id="shutter" class="shutter" aria-label="Take a picture">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 8.5h3.2l1.4-2h7.8l1.4 2H20a1 1 0 0 1 1 1V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1Z"/>
+          <circle cx="12" cy="13.5" r="3.6"/>
+        </svg>
+      </button>
+      <button id="pause" class="pause" hidden>⏸︎</button>
+    </div>
   </div>
 </section>
 

@@ -4,11 +4,12 @@ const $ = id => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), tiny = $('tiny');
 const bubble = $('bubble'), bubbleText = $('bubbleText');
 const shutter = $('shutter'), pauseBtn = $('pause'), livedot = $('livedot');
-const thinking = $('thinking'), thinkingText = $('thinkingText');
-const bubbleWait = $('bubbleWait');
-const buddy = document.querySelector('.buddy'), buddyFace = $('buddyFace');
-const freeze = $('freeze');
+const pip = $('pip'), buddyFace = $('buddyFace');
+const aim = $('aim'), flyer = $('flyer');
+const photo = $('photo'), shot = $('shot'), bar = $('bar');
+const cameraScreen = $('camera');
 
+const CROP        = 0.65;   // fraction of the frame Pip actually looks at
 const AMBIENT_MS  = 5000;   // gap between automatic looks
 const DIFF_THRESH = 9;      // 0-255; below this the scene counts as "unchanged"
 const MAX_HISTORY = 60;
@@ -92,6 +93,44 @@ function speak(text, onWord) {
   });
 }
 
+/* ── Pip roams ──────────────────────────────────────────────
+   He drifts around the live area, but is kept out of the caption, the photo
+   stack and the aim brackets, so he never covers what the child is reading
+   or pointing at. */
+let roamTimer = null;
+
+function roam() {
+  const screenRect = cameraScreen.getBoundingClientRect();
+  const hud = document.querySelector('.hud').getBoundingClientRect();
+  const keepOut = [
+    aim.getBoundingClientRect(),                       // never sit on what they're aiming at
+    document.querySelector('.back').getBoundingClientRect(),
+    hud                                                // never over the caption or button
+  ];
+  const size = 48, pad = 12;
+  const minX = screenRect.left + pad, maxX = screenRect.right - size - pad;
+  const minY = screenRect.top + pad,  maxY = hud.top - size - pad;
+  if (maxX <= minX || maxY <= minY) return;
+
+  const clashes = (x, y) => keepOut.some(r =>
+    x + size + pad > r.left && x - pad < r.right &&
+    y + size + pad > r.top  && y - pad < r.bottom);
+
+  // Try a few random spots; if the screen is too crowded to find a clear one,
+  // leave him where he is rather than dropping him on the caption.
+  for (let i = 0; i < 24; i++) {
+    const x = minX + Math.random() * (maxX - minX);
+    const y = minY + Math.random() * (maxY - minY);
+    if (clashes(x, y)) continue;
+    pip.style.transform =
+      `translate(${Math.round(x - screenRect.left)}px, ${Math.round(y - screenRect.top)}px)`;
+    return;
+  }
+}
+
+function startRoaming() { roam(); clearInterval(roamTimer); roamTimer = setInterval(roam, 2100); }
+function stopRoaming() { clearInterval(roamTimer); roamTimer = null; }
+
 /* ── the wait ───────────────────────────────────────────────
    Three seconds is a long time for a small child staring at a
    frozen button, so we give them a friend to watch instead. */
@@ -127,40 +166,32 @@ const pick = a => a[Math.floor(Math.random() * a.length)];
 function setFace(mood) { buddyFace.src = `char/${FACES[mood]}.png`; }
 
 function startThinking() {
-  buddy.classList.remove('happy');
   setFace('think');
-  thinking.hidden = false;
+  pip.hidden = false;
+  startRoaming();
 
-  // The waiting message goes in the caption bubble, so repeated taps reuse one
-  // bubble instead of it popping in and out under the child.
-  bubbleText.textContent = '';
-  thinkingText.textContent = pick(THINKING_WORDS).replace(/[.…]+$/, '');
-  bubbleWait.hidden = false;
-  $('replay').hidden = true;
+  // A moving bar reads as progress; a word alone reads as a stuck app.
+  bar.hidden = false;
   bubble.hidden = false;
-
-  shutter.hidden = true;          // no button to hammer while Pip is looking
+  $('replay').hidden = true;
+  shutter.hidden = true;               // nothing to hammer while Pip is looking
 
   clearInterval(thinkTimer);
-  thinkTimer = setInterval(() => {
-    thinkingText.textContent = pick(THINKING_WORDS).replace(/[.…]+$/, '');
-    setFace(Math.random() < 0.5 ? 'think' : 'curious');   // small glance, keeps it alive
-  }, 1600);
-}
-
-// Pip cheers, then gets out of the way so the answer can be read.
-function celebrate() {
-  clearInterval(thinkTimer); thinkTimer = null;
-  setFace('happy');
-  buddy.classList.add('happy');
-  setTimeout(() => { thinking.hidden = true; buddy.classList.remove('happy'); }, 900);
+  thinkTimer = setInterval(() => setFace(Math.random() < 0.5 ? 'think' : 'curious'), 1500);
 }
 
 function stopThinking() {
   clearInterval(thinkTimer); thinkTimer = null;
-  thinking.hidden = true;
-  bubbleWait.hidden = true;
+  bar.hidden = true;
   shutter.hidden = false;
+}
+
+// Pip cheers when the answer lands, then settles back to roaming.
+function celebrate() {
+  clearInterval(thinkTimer); thinkTimer = null;
+  bar.hidden = true;
+  setFace('happy');
+  setTimeout(() => setFace('curious'), 1200);
 }
 
 /* ── camera ─────────────────────────────────────────────── */
@@ -178,13 +209,18 @@ function stopCamera() {
   stream = null; video.srcObject = null;
 }
 
-// Draw the current frame, longest side capped at `max`, return a JPEG data URL.
-function grab(max, quality) {
+// Draw the current frame, longest side capped at `max`, as a JPEG data URL.
+// `crop` keeps only the middle of the frame. Measured on cluttered scenes, this
+// is what fixes "Image collage. Various textures" - telling the model to look at
+// the middle barely helped, actually cropping to it took 1/4 correct to 4/4.
+function grab(max, quality, crop = 1) {
   const w = video.videoWidth, h = video.videoHeight;
   if (!w) return null;
-  const s = Math.min(1, max / Math.max(w, h));
-  canvas.width = Math.round(w * s); canvas.height = Math.round(h * s);
-  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+  const side = Math.min(w, h) * crop;
+  const sx = (w - side) / 2, sy = (h - side) / 2;
+  const out = Math.min(max, Math.round(side));
+  canvas.width = canvas.height = out;
+  canvas.getContext('2d').drawImage(video, sx, sy, side, side, 0, 0, out, out);
   return canvas.toDataURL('image/jpeg', quality);
 }
 
@@ -207,11 +243,37 @@ function sceneChanged() {
   return changed;
 }
 
-/* ── the frozen frame ───────────────────────────────────────
-   Hold the picture the child just took on screen, so they can keep
-   looking at the thing while Pip talks about it. */
-function holdFrame(dataUrl) { freeze.src = dataUrl; freeze.hidden = false; }
-function releaseFrame() { freeze.hidden = true; freeze.removeAttribute('src'); }
+/* ── the snapshot flight ────────────────────────────────────
+   The shot must not cover the camera, or the child cannot aim at the next
+   thing. So it starts over the aim brackets and flies down onto the stack. */
+function flyToStack(dataUrl) {
+  const from = aim.getBoundingClientRect();
+  photo.hidden = false;
+  const to = photo.getBoundingClientRect();
+
+  flyer.src = dataUrl;
+  Object.assign(flyer.style, {
+    left: from.left + 'px', top: from.top + 'px',
+    width: from.width + 'px', height: from.height + 'px',
+    transition: 'none', transform: 'none', opacity: '1'
+  });
+  flyer.hidden = false;
+
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const dx = (to.left + to.width / 2) - (from.left + from.width / 2);
+    const dy = (to.top + to.height / 2) - (from.top + from.height / 2);
+    flyer.style.transition = 'transform .5s cubic-bezier(.4,.1,.3,1), opacity .5s ease-in';
+    flyer.style.transform =
+      `translate(${dx}px, ${dy}px) scale(${to.width / from.width}, ${to.height / from.height})`;
+  }));
+
+  setTimeout(() => { shot.src = dataUrl; flyer.hidden = true; flyer.removeAttribute('src'); }, 520);
+}
+
+function clearStack() {
+  photo.hidden = true; shot.removeAttribute('src');
+  flyer.hidden = true; flyer.removeAttribute('src');
+}
 
 /* ── the model call ─────────────────────────────────────── */
 async function describe(imageDataUrl, m) {
@@ -255,8 +317,9 @@ function show(raw) {
   // The model likes blank lines. white-space:pre on each word span would render
   // them literally and blow holes in the caption, so flatten to single spaces.
   const text = String(raw).replace(/\s+/g, ' ').trim();
-  bubbleWait.hidden = true;
+  bar.hidden = true;
   $('replay').hidden = false;
+  bubbleText.scrollTop = 0;
   bubbleText.textContent = '';
   wordSpans = []; wordStarts = [];
   const re = /\S+\s*/g; let m;
@@ -274,6 +337,13 @@ function lightWord(charIndex) {
   let idx = 0;
   while (idx + 1 < wordStarts.length && wordStarts[idx + 1] <= charIndex) idx++;
   wordSpans.forEach((s, i) => s.classList.toggle('lit', i === idx));
+  // The caption is only ~11% of the screen now, so long answers must scroll
+  // themselves - always keeping the word being spoken in view.
+  const el = wordSpans[idx];
+  if (el && bubbleText.scrollHeight > bubbleText.clientHeight + 2) {
+    const want = el.offsetTop - (bubbleText.clientHeight - el.offsetHeight) / 2;
+    bubbleText.scrollTo({ top: Math.max(0, want), behavior: 'smooth' });
+  }
 }
 
 function clearWords() { wordSpans.forEach(s => s.classList.remove('lit')); }
@@ -283,38 +353,38 @@ async function ask() {
   // Small children tap a big button many times. Extra taps are dropped, but
   // Pip wiggles so the tap still feels like it did something.
   if (busy) {
-    buddy.classList.remove('nudge');
-    void buddy.offsetWidth;           // restart the animation
-    buddy.classList.add('nudge');
-    setTimeout(() => buddy.classList.remove('nudge'), 450);
+    pip.classList.remove('nudge');
+    void pip.offsetWidth;             // restart the animation
+    pip.classList.add('nudge');
+    setTimeout(() => pip.classList.remove('nudge'), 450);
     return;
   }
   busy = true;
-  releaseFrame();
+  cameraScreen.classList.remove('fresh');
   chime();                 // instant feedback on the tap itself
   startThinking();
   try {
-    const full = grab(768, 0.7);
+    const full = grab(768, 0.7, CROP);
     if (!full) throw new Error('no frame');
-    holdFrame(full);       // the picture stays put while Pip thinks
+    flyToStack(full);      // the shot lands on the stack, camera stays visible
     const text = await describe(full, 'ask');
     celebrate();
     show(text);
     // Ready for the next picture as soon as the answer is here - making a child
     // sit through the whole sentence before they can tap again is too long.
     busy = false; shutter.hidden = false;
-    save(grab(180, 0.5), text);
+    save(grab(180, 0.5, CROP), text);
     await speak(text, lightWord);
     clearWords();
   } catch (err) {
     clearInterval(thinkTimer); thinkTimer = null;
-    setFace('oops'); thinkingText.textContent = 'Oops!';
-    setTimeout(stopThinking, 900);
+    bar.hidden = true;
+    setFace('oops'); setTimeout(() => setFace('curious'), 1500);
     const oops = "Hmm, I couldn't see that. Let's try again!";
     show(oops); await speak(oops);
   } finally {
     busy = false;
-    bubbleWait.hidden = true;
+    bar.hidden = true;
     shutter.hidden = false;
   }
 }
@@ -324,12 +394,12 @@ async function ambientLoop() {
   while (ambientOn) {
     if (sceneChanged()) {
       try {
-        const full = grab(768, 0.65);
+        const full = grab(768, 0.65, 1);
         if (full) {
           const text = await describe(full, 'ambient');
           if (!ambientOn) break;
           show(text);
-          save(grab(180, 0.5), text);
+          save(grab(180, 0.5, CROP), text);
           await speak(text, lightWord); // next look waits until this finishes
           clearWords();
         }
@@ -341,7 +411,7 @@ async function ambientLoop() {
 
 async function startAmbient() {
   ambientOn = true; lastFrame = null;
-  releaseFrame();          // ambient watches the world live, never frozen
+  clearStack();            // ambient watches the world live, never frozen
   livedot.hidden = false; pauseBtn.hidden = false; shutter.hidden = true;
   try { wakeLock = await navigator.wakeLock.request('screen'); } catch (_) {}
   ambientLoop();
@@ -467,7 +537,8 @@ async function go(to, push = true) {
   }
   stopAmbient();
   stopThinking();
-  releaseFrame();
+  stopRoaming();
+  clearStack();
   speechSynthesis.cancel();
   bubble.hidden = true;
 
@@ -476,6 +547,10 @@ async function go(to, push = true) {
 
   if (screen === 'camera') {
     mode = to;
+    cameraScreen.classList.add('fresh');
+    bubble.hidden = true; photo.hidden = true;
+    pip.hidden = (to === 'ambient');
+    if (to !== 'ambient') startRoaming();
     try { await startCamera(); }
     catch { show("I can't open the camera. Ask a grown-up to help!"); return; }
     if (to === 'ambient') startAmbient();
