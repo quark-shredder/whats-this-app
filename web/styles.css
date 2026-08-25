@@ -192,3 +192,13 @@ body{
 .vbtn.sel{background:var(--ask);color:#1b1033}
 .vbtn small{display:block;opacity:.65;font-weight:500;font-size:.82rem;margin-top:2px}
 .vbtn.sel small{opacity:.8}
+
+/* male / female filter */
+.chips{display:flex;gap:8px;margin:0 0 12px}
+.chip{
+  flex:1;border:0;border-radius:99px;padding:10px 6px;
+  background:rgba(255,255,255,.12);color:var(--ink);
+  font:700 .92rem system-ui,sans-serif;
+}
+.chip.on{background:var(--ambient);color:#1b1033}
+.gtag{opacity:.75;font-weight:700;margin-left:4px}

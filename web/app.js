@@ -346,17 +346,59 @@ function renderBook() {
 /* ── voice settings ─────────────────────────────────────── */
 const SAMPLE = "Ooh! It's a fluffy cat. Grey like a cloud!";
 
+// The speech API does not report gender. Android's Google voices encode it in the
+// voiceURI (en-in-x-ahp#female_1-local); elsewhere we fall back to known voice
+// names. Anything we cannot place is shown as unknown rather than guessed.
+const FEMALE_NAMES = /^(Samantha|Karen|Moira|Tessa|Fiona|Veena|Kathy|Princess|Victoria|Allison|Ava|Susan|Zoe|Nicky|Serena|Kate|Stephanie|Shelley|Sandy|Flo|Grandma|Superstar|Nora|Alva|Ellen|Anna|Carmit|Damayanti|Lekha|Paulina|Sara|Yuna|Amelie|Joana|Luciana|Milena|Monica|Mónica)\b/i;
+const MALE_NAMES   = /^(Rishi|Daniel|Albert|Fred|Ralph|Alex|Tom|Aaron|Arthur|Gordon|Lee|Oliver|Rocko|Reed|Eddy|Grandpa|Junior|Jester|Bruce|Diego|Jorge|Juan|Maged|Thomas|Xander|Yuri|Nikos)\b/i;
+
+function genderOf(v) {
+  const uri = (v.voiceURI || '') + ' ' + v.name;
+  if (/#\s*female|_female|\bfemale\b/i.test(uri)) return 'female';
+  if (/#\s*male|_male|\bmale\b/i.test(uri))       return 'male';
+  if (FEMALE_NAMES.test(v.name)) return 'female';
+  if (MALE_NAMES.test(v.name))   return 'male';
+  return null;
+}
+
+let genderFilter = 'all';
+
 function renderVoices() {
   const list = $('voiceList'); list.innerHTML = '';
-  const vs = englishVoices();
+  let vs = englishVoices();
   if (!vs.length) { list.textContent = 'No voices found on this device.'; return; }
+
+  const counts = { all: vs.length, female: 0, male: 0 };
+  vs.forEach(v => { const g = genderOf(v); if (g) counts[g]++; });
+  if (genderFilter !== 'all') vs = vs.filter(v => genderOf(v) === genderFilter);
+
+  const chips = document.createElement('div');
+  chips.className = 'chips';
+  for (const g of ['all', 'female', 'male']) {
+    const c = document.createElement('button');
+    c.className = 'chip' + (genderFilter === g ? ' on' : '');
+    c.textContent = `${g === 'all' ? 'All' : g === 'female' ? 'Female' : 'Male'} (${counts[g]})`;
+    c.onclick = () => { genderFilter = g; renderVoices(); };
+    chips.append(c);
+  }
+  list.append(chips);
+
+  if (!vs.length) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = 'No voices on this phone are labelled ' + genderFilter + '.';
+    list.append(p); return;
+  }
+
   for (const v of vs) {
+    const g = genderOf(v);
     const b = document.createElement('button');
     b.className = 'vbtn' + (voice && v.name === voice.name ? ' sel' : '');
-    b.innerHTML = `${v.name}<small>${v.lang}${v.localService ? '' : ' · needs network'}</small>`;
+    b.innerHTML = `${v.name} <span class="gtag">${g === 'female' ? '♀' : g === 'male' ? '♂' : '?'}</span>` +
+                  `<small>${v.lang}${v.localService ? '' : ' · needs network'}</small>`;
     b.onclick = () => {
       voice = v; prefs.voiceName = v.name; savePrefs();
-      [...list.children].forEach(c => c.classList.remove('sel'));
+      [...list.querySelectorAll('.vbtn')].forEach(c => c.classList.remove('sel'));
       b.classList.add('sel');
       speak(SAMPLE);
     };
@@ -375,7 +417,15 @@ bindSlider('rate', 'rate');
 bindSlider('pitch', 'pitch');
 
 /* ── navigation ─────────────────────────────────────────── */
-async function go(to) {
+// `push` is false when the move came from the browser's own back button,
+// so we don't add another entry and trap the child in a loop.
+async function go(to, push = true) {
+  if (push) {
+    // Home is the base entry; every other screen adds one, so Back returns
+    // to the app's home screen instead of leaving the app entirely.
+    if (to === 'home') history.replaceState({ screen: 'home' }, '');
+    else history.pushState({ screen: to }, '');
+  }
   stopAmbient();
   stopThinking();
   speechSynthesis.cancel();
@@ -397,6 +447,10 @@ async function go(to) {
 }
 
 document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
+
+// Android's back button (and the browser's) moves within the app.
+history.replaceState({ screen: 'home' }, '');
+window.addEventListener('popstate', e => go((e.state && e.state.screen) || 'home', false));
 shutter.onclick  = ask;
 pauseBtn.onclick = () => { ambientOn ? stopAmbient() : startAmbient(); };
 $('replay').onclick = () => speak(bubbleText.textContent, lightWord).then(clearWords);
