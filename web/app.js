@@ -19,20 +19,35 @@ let lastFrame = null;       // 16x16 grayscale of the last frame we described
    Everything speaks through here. To swap in a cloud or
    self-hosted voice later, replace the body of speak() and
    nothing else in the app changes. */
-const VOICE_LANG = 'en-IN';   // Indian English; falls back to any English voice
-const VOICE_RATE = 0.8;       // slower than default — a 4-7 year old needs the gaps
-const VOICE_PITCH = 1.1;
+const VOICE_LANG = 'en-IN';   // preferred; falls back to any English voice
+
+// The grown-up's choices, remembered on this device. The phone's voice list is
+// nothing like the laptop's, so this has to be set on the phone itself.
+const prefs = Object.assign(
+  { voiceName: null, rate: 0.8, pitch: 1.1 },
+  JSON.parse(localStorage.getItem('whatsthis-voice') || '{}')
+);
+const savePrefs = () => localStorage.setItem('whatsthis-voice', JSON.stringify(prefs));
 
 let voice = null;
+function englishVoices() {
+  return speechSynthesis.getVoices()
+    .filter(v => v.lang.toLowerCase().startsWith('en'))
+    .sort((a, b) => (b.lang.replace('_','-') === VOICE_LANG) - (a.lang.replace('_','-') === VOICE_LANG)
+                 || a.name.localeCompare(b.name));
+}
+
 function pickVoice() {
   const all = speechSynthesis.getVoices();
-  // Prefer an Indian English voice, then any English one.
-  const indian  = all.filter(v => v.lang.replace('_', '-') === VOICE_LANG);
-  const english = all.filter(v => v.lang.startsWith('en'));
-  const pool = indian.length ? indian : english;
-  voice = pool.find(v => /female|neural|natural/i.test(v.name))
-       || pool.find(v => /google/i.test(v.name)) || pool[0] || null;
-  if (voice) console.log('voice:', voice.name, voice.lang);
+  if (prefs.voiceName) {
+    voice = all.find(v => v.name === prefs.voiceName) || null;
+    if (voice) return;
+  }
+  const pool = englishVoices();
+  const indian = pool.filter(v => v.lang.replace('_', '-') === VOICE_LANG);
+  const from = indian.length ? indian : pool;
+  voice = from.find(v => /female|neural|natural/i.test(v.name))
+       || from.find(v => /google/i.test(v.name)) || from[0] || null;
 }
 speechSynthesis.onvoiceschanged = pickVoice; pickVoice();
 
@@ -44,7 +59,7 @@ function speak(text, onWord) {
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     if (voice) { u.voice = voice; u.lang = voice.lang; }
-    u.rate = VOICE_RATE; u.pitch = VOICE_PITCH;
+    u.rate = prefs.rate; u.pitch = prefs.pitch;
 
     let fallback = null;
     if (onWord) {
@@ -60,7 +75,7 @@ function speak(text, onWord) {
           const offsets = [];
           const re = /\S+/g; let m;
           while ((m = re.exec(text))) offsets.push(m.index);
-          const per = (text.length / 14) / VOICE_RATE * 1000 / Math.max(offsets.length, 1);
+          const per = (text.length / 14) / prefs.rate * 1000 / Math.max(offsets.length, 1);
           let i = 0;
           fallback = setInterval(() => {
             if (i >= offsets.length) return clearInterval(fallback);
@@ -328,6 +343,37 @@ function renderBook() {
   }
 }
 
+/* ── voice settings ─────────────────────────────────────── */
+const SAMPLE = "Ooh! It's a fluffy cat. Grey like a cloud!";
+
+function renderVoices() {
+  const list = $('voiceList'); list.innerHTML = '';
+  const vs = englishVoices();
+  if (!vs.length) { list.textContent = 'No voices found on this device.'; return; }
+  for (const v of vs) {
+    const b = document.createElement('button');
+    b.className = 'vbtn' + (voice && v.name === voice.name ? ' sel' : '');
+    b.innerHTML = `${v.name}<small>${v.lang}${v.localService ? '' : ' · needs network'}</small>`;
+    b.onclick = () => {
+      voice = v; prefs.voiceName = v.name; savePrefs();
+      [...list.children].forEach(c => c.classList.remove('sel'));
+      b.classList.add('sel');
+      speak(SAMPLE);
+    };
+    list.append(b);
+  }
+}
+
+function bindSlider(id, key) {
+  const el = $(id), out = $(id + 'Val');
+  el.value = prefs[key];
+  out.textContent = (+prefs[key]).toFixed(2);
+  el.oninput = () => { out.textContent = (+el.value).toFixed(2); };
+  el.onchange = () => { prefs[key] = +el.value; savePrefs(); speak(SAMPLE); };
+}
+bindSlider('rate', 'rate');
+bindSlider('pitch', 'pitch');
+
 /* ── navigation ─────────────────────────────────────────── */
 async function go(to) {
   stopAmbient();
@@ -346,6 +392,7 @@ async function go(to) {
   } else {
     stopCamera();
     if (to === 'book') renderBook();
+    if (to === 'voice') renderVoices();
   }
 }
 
