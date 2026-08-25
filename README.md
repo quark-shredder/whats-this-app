@@ -15,63 +15,55 @@ of thumbnails; tapping one says it again.
 
 ## How it works
 
-The camera frame goes to a vision model running on **erhulk's own GPU** via Ollama.
-No image ever leaves the tailnet, and there is no per-picture cost. Speech is the
-phone's built-in voice (Web Speech API).
+Everything runs on one machine — the camera frame goes to a vision model in a
+local Ollama, and the reply is spoken by the phone's own voice. No image ever
+leaves the tailnet, and there is no per-picture cost.
 
 ```
-phone (PWA) ──https──> erhulk:8080 (node) ──> ollama :11434 ──> gemma3:12b
-                                    │
-                       phone's own TTS voice reads the reply
+phone (PWA) ──https──> Mac :8080 (node) ──> ollama :11435 ──> gemma3:4b
+                                 │
+                    phone's own TTS voice reads the reply
 ```
 
 ## Running it
 
-On erhulk:
-
 ```bash
-cd ~/whats_this
-MODEL=gemma3:12b PORT=8080 node server/server.js
+./run-local.sh          # starts Ollama (Metal) and the app server
 ```
 
-The server warms the model on boot and holds it in VRAM for 2 hours
-(`keep_alive`). Without that, the first question after an idle period takes ~17s
-instead of ~0.6s.
-
-### HTTPS without root
-
-Chrome only grants camera access over HTTPS. `sudo tailscale serve` would be the
-obvious way to get a cert, but `tailscaled` gates both `serve` and `cert` behind
-root/operator, and we have no sudo on erhulk.
-
-The way around it: run a **second `tailscaled` in userspace mode, owned by `ubuntu`**.
-You own that daemon, so `serve` needs no root — and in userspace-networking mode
-binding :443 is not a privileged OS bind either. It joins the tailnet as its own
-node, `whats-this`, with its own Let's Encrypt cert.
+Serve it over HTTPS so Chrome will allow camera access (tailnet only, not public):
 
 ```bash
-/home/ubuntu/whats_this/start.sh     # starts app server + userspace tailscaled + serve
+/Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg --https=443 http://127.0.0.1:8080
 ```
 
-`start.sh` is idempotent and wired to `@reboot` in the `ubuntu` crontab, so the
-whole thing comes back after a restart with no root involved.
+On the child's phone: install Tailscale, sign in, open
+`https://dev-ws-arjun.tail4c7473.ts.net`, then Chrome **⋮ → Add to Home screen**.
 
-**Live at `https://whats-this.tail4c7473.ts.net`** (tailnet only).
+The server warms the model on boot and holds it for 2 hours (`keep_alive`), and
+retries until Ollama answers — a cold load costs seconds you don't want a child
+waiting through.
 
-On the child's phone: install Tailscale, sign in to the tailnet, open that URL in
-Chrome, then **⋮ → Add to Home screen**.
+## Measured latency
 
-## Measured latency (RTX 5090, 768px frames)
+Same 768px frame, warm model, `gemma3:4b`:
 
-| model | per frame | note |
+| host | per frame | note |
 |---|---|---|
-| gemma4:e2b | 0.19s | fastest, slightly plainer wording |
-| gemma4:e4b | 0.26s | |
-| **gemma3:12b** | **0.44s** | current default — warmest tone |
-| gemma4:26b | 0.29s | |
-| mistral-small3.2:24b | 0.40s | |
+| MacBook M3 Pro (Metal) | **2.5-3.2s** | current dev machine; ~3.2 GB resident |
+| RTX 5090 | 0.25s | ~10x faster; needs a dedicated always-on box |
 
-Change with the `MODEL` env var; all six are already pulled on erhulk.
+Output length barely matters — dropping `num_predict` 40 -> 15 moved 2.60s to
+2.53s. The cost is the vision encoder, not text generation, so smaller frames
+are the lever if this needs to get faster.
+
+Model footprints measured on the 5090:
+
+| model | VRAM | latency |
+|---|---|---|
+| qwen2.5vl:3b | 5,768 MiB | 0.06s |
+| **gemma3:4b** | **5,082 MiB** | **0.25s** |
+| gemma3:12b | 11,544 MiB | 0.39s |
 
 ## Tuning
 

@@ -3,3 +3,4 @@ bench/
 *.log
 .DS_Store
 tts/
+ollama-local/
