@@ -1,6 +1,23 @@
 /* "What's this?" — a camera the world talks back to. */
 
+// index.html and app.js are cached separately, so they can drift apart - a stale
+// page with fresh script means null elements and dead buttons. If the pair does
+// not match, throw the cache away and reload once.
+const APP_VERSION = '15';
+
 const $ = id => document.getElementById(id);
+
+(function versionGuard() {
+  const meta = document.querySelector('meta[name="app-version"]');
+  const pageVersion = meta && meta.content;
+  if (pageVersion === APP_VERSION) return;
+  if (sessionStorage.getItem('version-heal')) return;   // only ever once
+  sessionStorage.setItem('version-heal', '1');
+  console.warn(`[whatsthis] version skew: page ${pageVersion}, script ${APP_VERSION} - reloading`);
+  caches.keys().then(ks => Promise.all(ks.map(k => caches.delete(k))))
+    .catch(() => {})
+    .then(() => location.reload(true));
+})();
 const video = $('video'), canvas = $('canvas'), tiny = $('tiny');
 const bubble = $('bubble'), bubbleText = $('bubbleText');
 const shutter = $('shutter'), pauseBtn = $('pause'), livedot = $('livedot');
@@ -702,12 +719,19 @@ function bindSlider(id, key) {
   el.oninput = () => { out.textContent = (+el.value).toFixed(2); };
   el.onchange = () => { prefs[key] = +el.value; savePrefs(); speak(SAMPLE); };
 }
-bindSlider('rate', 'rate');
-bindSlider('pitch', 'pitch');
-$('clearLog').onclick = () => { localStorage.removeItem('whatsthis-log'); renderLog(); };
-$('conn').onclick = checkConn;
-addEventListener('online',  () => logLine('NET', 'back online'));
-addEventListener('offline', () => logLine('NET', 'went offline'));
+// Settings wiring is optional furniture. If any of it is missing - a stale
+// cached index.html paired with a newer app.js, say - it must not take the rest
+// of the app down with it.
+try {
+  bindSlider('rate', 'rate');
+  bindSlider('pitch', 'pitch');
+  $('clearLog').onclick = () => { localStorage.removeItem('whatsthis-log'); renderLog(); };
+  $('conn').onclick = checkConn;
+  addEventListener('online',  () => logLine('NET', 'back online'));
+  addEventListener('offline', () => logLine('NET', 'went offline'));
+} catch (err) {
+  logLine('WIRE', 'settings wiring skipped: ' + err.message);
+}
 
 /* ── navigation ─────────────────────────────────────────── */
 // `push` is false when the move came from the browser's own back button,
@@ -722,21 +746,26 @@ async function go(to, push = true) {
 }
 
 async function navigate(to, push) {
+  // Show the destination first. Everything else - stopping timers, clearing
+  // state, opening the camera - can fail without stranding the child on a
+  // screen that ignored their tap.
+  const screenId = (to === 'ask' || to === 'ambient') ? 'camera' : to;
+  document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === screenId));
+  if (screenId === 'camera') { warming.hidden = false; cameraScreen.classList.add('fresh'); }
+
   if (push) {
     // Home is the base entry; every other screen adds one, so Back returns
     // to the app's home screen instead of leaving the app entirely.
     if (to === 'home') history.replaceState({ screen: 'home' }, '');
     else history.pushState({ screen: to }, '');
   }
-  stopAmbient();
-  stopThinking();
-  stopRoaming();
-  clearStack();
-  speechSynthesis.cancel();
-  bubble.hidden = true;
+  try {
+    stopAmbient(); stopThinking(); stopRoaming(); clearStack();
+    speechSynthesis.cancel();
+    bubble.hidden = true;
+  } catch (err) { logLine('NAV', 'cleanup failed: ' + err.message); }
 
-  const screen = (to === 'ask' || to === 'ambient') ? 'camera' : to;
-  document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === screen));
+  const screen = screenId;
 
   if (screen === 'camera') {
     mode = to;
@@ -766,17 +795,37 @@ async function navigate(to, push) {
   }
 }
 
-document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => go(b.dataset.go));
-photo.addEventListener('click', () => {
-  if (bubbleText.textContent.trim()) speak(bubbleText.textContent, lightWord).then(clearWords);
-});
+// A tap must always be felt, even if what follows is slow or broken - a child
+// who gets no response assumes the tap missed and hammers the button.
+function wireButtons() {
+  for (const b of document.querySelectorAll('[data-go]')) {
+    b.addEventListener('pointerdown', () => {
+      b.classList.add('pressed');
+      try { chime(); } catch (_) {}
+    });
+    const release = () => b.classList.remove('pressed');
+    b.addEventListener('pointerup', release);
+    b.addEventListener('pointercancel', release);
+    b.addEventListener('pointerleave', release);
+    b.addEventListener('click', () => { release(); go(b.dataset.go); });
+  }
+}
+wireButtons();
+
+try {
+  photo.addEventListener('click', () => {
+    if (bubbleText.textContent.trim()) speak(bubbleText.textContent, lightWord).then(clearWords);
+  });
+} catch (err) { logLine('WIRE', 'photo tap skipped: ' + err.message); }
 
 // Android's back button (and the browser's) moves within the app.
 history.replaceState({ screen: 'home' }, '');
 window.addEventListener('popstate', e => go((e.state && e.state.screen) || 'home', false));
 shutter.onclick  = ask;
 pauseBtn.onclick = () => { ambientOn ? stopAmbient() : startAmbient(); };
-$('replay').onclick = () => speak(bubbleText.textContent, lightWord).then(clearWords);
+try {
+  $('replay').onclick = () => speak(bubbleText.textContent, lightWord).then(clearWords);
+} catch (err) { logLine('WIRE', 'replay skipped: ' + err.message); }
 
 // Pause everything when the app goes to the background.
 document.addEventListener('visibilitychange', () => { if (document.hidden) { stopAmbient(); speechSynthesis.cancel(); } });

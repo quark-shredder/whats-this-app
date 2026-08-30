@@ -39,7 +39,15 @@ body{
   font:700 1.45rem/1.15 "Andika",system-ui,sans-serif;
   box-shadow:0 6px 0 rgba(160,90,80,.22);transition:transform .1s,box-shadow .1s;
 }
-.tile:active{transform:translateY(5px);box-shadow:0 1px 0 rgba(160,90,80,.22)}
+.tile:active,.tile.pressed{
+  transform:translateY(5px) scale(.985);
+  box-shadow:0 1px 0 rgba(160,90,80,.22);
+  filter:brightness(.94);
+}
+/* the press must be visible the instant a finger lands, not after the tap
+   resolves - a child who sees nothing assumes they missed */
+.tile{transition:transform .06s ease-out, box-shadow .06s ease-out, filter .06s ease-out}
+.back.pressed,.gear.pressed{transform:scale(.9);filter:brightness(.92)}
 .tile .emoji{font-size:3.4rem;line-height:1}
 .tile-ask{background:var(--coral);color:var(--cream)}
 .tile-ambient{background:var(--blush)}
