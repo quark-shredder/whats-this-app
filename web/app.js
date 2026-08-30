@@ -7,7 +7,7 @@ const shutter = $('shutter'), pauseBtn = $('pause'), livedot = $('livedot');
 const pip = $('pip'), buddyFace = $('buddyFace');
 const aim = $('aim'), flyer = $('flyer');
 const photo = $('photo'), shot = $('shot'), bar = $('bar');
-const cameraScreen = $('camera');
+const cameraScreen = $('camera'), warming = $('warming');
 
 // What Pip actually looks at: a rectangle around the middle, measured against
 // the frame's short side. Taller than wide, which suits a phone held upright.
@@ -232,14 +232,35 @@ function celebrate() {
 }
 
 /* ── camera ─────────────────────────────────────────────── */
+// A child taps the tile several times while waiting, so overlapping calls must
+// share one attempt rather than each asking the OS for the camera again.
+let cameraPending = null;
+
 async function startCamera() {
-  if (stream) return;
-  stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } },
-    audio: false
-  });
-  video.srcObject = stream;
-  await video.play();
+  if (stream && video.videoWidth) return;
+  if (cameraPending) return cameraPending;
+
+  cameraPending = (async () => {
+    if (!stream) {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } },
+        audio: false
+      });
+      video.srcObject = stream;
+    }
+    await video.play();
+    // play() resolves before there are pixels; wait for a real frame so we do
+    // not hand the child a black screen and call it ready.
+    if (!video.videoWidth) {
+      await new Promise(res => {
+        const done = () => { video.removeEventListener('loadeddata', done); res(); };
+        video.addEventListener('loadeddata', done);
+        setTimeout(done, 4000);
+      });
+    }
+  })();
+
+  try { await cameraPending; } finally { cameraPending = null; }
 }
 function stopCamera() {
   if (stream) stream.getTracks().forEach(t => t.stop());
@@ -691,7 +712,16 @@ addEventListener('offline', () => logLine('NET', 'went offline'));
 /* ── navigation ─────────────────────────────────────────── */
 // `push` is false when the move came from the browser's own back button,
 // so we don't add another entry and trap the child in a loop.
+let navigating = false;
+
 async function go(to, push = true) {
+  // Repeat taps while a screen is opening should be absorbed, not queued up.
+  if (navigating) return;
+  navigating = true;
+  try { await navigate(to, push); } finally { navigating = false; }
+}
+
+async function navigate(to, push) {
   if (push) {
     // Home is the base entry; every other screen adds one, so Back returns
     // to the app's home screen instead of leaving the app entirely.
@@ -712,12 +742,24 @@ async function go(to, push = true) {
     mode = to;
     cameraScreen.classList.add('fresh');
     bubble.hidden = true; photo.hidden = true;
-    pip.hidden = (to === 'ambient');
-    if (to !== 'ambient') startRoaming();
-    try { await startCamera(); }
-    catch { show("I can't open the camera. Ask a grown-up to help!"); return; }
-    if (to === 'ambient') startAmbient();
+    pip.hidden = true;                    // Pip is in the warming panel meanwhile
+    shutter.disabled = true;              // nothing to tap until there is a picture
+
+    warming.hidden = !!video.videoWidth;  // already live? no need for the panel
+    try {
+      await startCamera();
+      warming.hidden = true;
+      shutter.disabled = false;
+      pip.hidden = (to === 'ambient');
+      if (to !== 'ambient') startRoaming();
+      if (to === 'ambient') startAmbient();
+    } catch (err) {
+      warming.hidden = true;
+      logLine('CAM', 'failed: ' + err.name + ': ' + err.message);
+      show("I can't open my eyes. Ask a grown-up to help!");
+    }
   } else {
+    warming.hidden = true;
     stopCamera();
     if (to === 'book') renderBook();
     if (to === 'voice') { renderVoices(); renderLog(); checkConn(); }

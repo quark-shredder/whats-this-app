@@ -28,6 +28,17 @@
 <section id="camera" class="screen">
   <video id="video" playsinline muted autoplay></video>
 
+  <!-- shown until the camera actually delivers frames, so the black gap does
+       not read as a stuck app -->
+  <div id="warming" class="warming" hidden>
+    <div class="warmpip">
+      <img class="body" src="char/pink_body_squircle.png" alt="">
+      <img class="face" src="char/face_e.png" alt="">
+    </div>
+    <p>Opening my eyes…</p>
+    <div class="warmdots"><b></b><b></b><b></b></div>
+  </div>
+
   <!-- brackets mark the middle of the frame - the only part Pip actually looks at -->
   <div id="aim" class="aim"></div>
 
