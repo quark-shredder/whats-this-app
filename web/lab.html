@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Detector lab</title>
+<link rel="stylesheet" href="fonts/andika.css">
+<style>
+:root{
+  --cream:#fffbf1; --butter:#fff2d0; --blush:#ffb2b2; --coral:#e36a6a;
+  --ink:#5a3330; --pad:env(safe-area-inset-bottom,0px);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:#000}
+body{font:400 15px/1.4 "Andika",system-ui,sans-serif;color:var(--ink);user-select:none}
+#video,#overlay{position:fixed;inset:0;width:100%;height:100%}
+#video{object-fit:cover;background:#000}
+#overlay{z-index:2}
+
+.stats{
+  position:fixed;top:max(8px,var(--pad));left:8px;right:8px;z-index:5;
+  background:rgba(255,251,241,.93);border-radius:14px;padding:10px 12px;
+  font:400 12.5px/1.5 ui-monospace,Menlo,monospace;white-space:pre;
+  box-shadow:0 4px 14px rgba(0,0,0,.3);
+}
+.stats b{color:var(--coral)}
+
+.panel{
+  position:fixed;left:8px;right:8px;bottom:max(8px,var(--pad));z-index:5;
+  background:rgba(255,251,241,.95);border-radius:16px;padding:12px;
+  display:flex;flex-direction:column;gap:9px;
+  box-shadow:0 -4px 18px rgba(0,0,0,.3);
+}
+.row{display:flex;align-items:center;gap:8px}
+.row label{font-size:12.5px;font-weight:700;min-width:74px}
+.row input[type=range]{flex:1;accent-color:var(--coral);height:28px}
+.row output{font:700 12.5px ui-monospace,monospace;min-width:52px;text-align:right;color:var(--coral)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{
+  border:0;border-radius:99px;padding:8px 11px;background:var(--butter);color:var(--ink);
+  font:700 12px "Andika",system-ui,sans-serif;
+}
+.chip.on{background:var(--coral);color:var(--cream)}
+.hint{font-size:11.5px;opacity:.65;text-align:center}
+</style>
+</head>
+<body>
+<video id="video" playsinline muted autoplay></video>
+<canvas id="overlay"></canvas>
+<div class="stats" id="stats">starting…</div>
+
+<div class="panel">
+  <div class="chips" id="models"></div>
+  <div class="row">
+    <label>threshold</label>
+    <input id="thr" type="range" min="0.05" max="0.6" step="0.05" value="0.15">
+    <output id="thrOut">0.15</output>
+  </div>
+  <div class="row">
+    <label>interval</label>
+    <input id="ivl" type="range" min="60" max="600" step="20" value="180">
+    <output id="ivlOut">180ms</output>
+  </div>
+  <div class="chips">
+    <button class="chip on" id="trackBtn">tracking: on</button>
+    <button class="chip" id="rawBtn">show raw too</button>
+    <button class="chip" id="resetBtn">reset stats</button>
+  </div>
+  <p class="hint">Tap a box to check the crop it would send</p>
+</div>
+
+<script type="module">
+const video = document.getElementById('video');
+const cv = document.getElementById('overlay');
+const cx = cv.getContext('2d');
+const statsEl = document.getElementById('stats');
+
+const B = 'https://storage.googleapis.com/mediapipe-models/object_detector/';
+const MODELS = {
+  'ssd_mobilenet_v2':   B + 'ssd_mobilenet_v2/float16/1/ssd_mobilenet_v2.tflite',
+  'efficientdet_lite0': B + 'efficientdet_lite0/float16/1/efficientdet_lite0.tflite',
+  'efficientdet_lite2': B + 'efficientdet_lite2/float16/1/efficientdet_lite2.tflite',
+};
+
+const cfg = { model: 'ssd_mobilenet_v2', threshold: 0.15, interval: 180,
+              tracking: true, showRaw: false };
+
+// ── stats ─────────────────────────────────────────────────
+const S = {
+  infer: [], detects: 0, renders: 0, dropped: 0,
+  jitter: [], t0: performance.now(), lastDetect: 0
+};
+const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+const pct = (a, p) => { if (!a.length) return 0; const s = [...a].sort((x,y)=>x-y);
+  return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
+function resetStats() {
+  S.infer = []; S.detects = 0; S.renders = 0; S.dropped = 0;
+  S.jitter = []; S.t0 = performance.now();
+}
+
+// ── tracking ──────────────────────────────────────────────
+// Raw detections flicker: a box can vanish in the 300ms between a child
+// deciding to tap and their finger landing. Tracks smooth over that.
+let tracks = [];
+let nextId = 1;
+const APPEAR_AFTER = 2;      // detections in a row before we draw it
+const EASE         = 0.35;   // how fast the drawn box chases the real one
+// How long a track survives with no detection. Must scale with the detect
+// interval: at a fixed 550ms, raising the interval to 300ms would kill a box
+// after two misses, which is exactly when a child's finger is on its way down.
+const keepMs = () => Math.max(500, cfg.interval * 3.5);
+
+const iou = (a, b) => {
+  const x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+  const x2 = Math.min(a.x + a.w, b.x + b.w), y2 = Math.min(a.y + a.h, b.y + b.h);
+  const i = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  return i / (a.w * a.h + b.w * b.h - i || 1);
+};
+
+function updateTracks(dets, now) {
+  const used = new Set();
+  for (const t of tracks) {
+    let best = -1, bestIou = 0.3;
+    dets.forEach((d, i) => {
+      if (used.has(i)) return;
+      const v = iou(t.raw, d);
+      if (v > bestIou) { bestIou = v; best = i; }
+    });
+    if (best >= 0) {
+      const d = dets[best]; used.add(best);
+      S.jitter.push(Math.hypot(d.x - t.raw.x, d.y - t.raw.y));
+      t.raw = d; t.label = d.label; t.score = d.score;
+      t.seen++; t.lastSeen = now;
+    }
+  }
+  dets.forEach((d, i) => {
+    if (used.has(i)) return;
+    tracks.push({ id: nextId++, raw: d, draw: { ...d }, label: d.label,
+                  score: d.score, seen: 1, lastSeen: now });
+  });
+  tracks = tracks.filter(t => now - t.lastSeen < keepMs());
+}
+
+// ── detector ──────────────────────────────────────────────
+let detector = null, busy = false, lastRun = 0, vision = null, fileset = null;
+
+async function loadDetector(name) {
+  statsEl.textContent = 'loading ' + name + '…';
+  if (!vision) {
+    vision = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18');
+    fileset = await vision.FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm');
+  }
+  const old = detector; detector = null;
+  if (old) old.close();
+  detector = await vision.ObjectDetector.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: MODELS[name], delegate: 'GPU' },
+    scoreThreshold: cfg.threshold, maxResults: 10, runningMode: 'VIDEO'
+  });
+  tracks = []; resetStats();
+}
+
+async function maybeDetect(now) {
+  if (!detector || busy) { if (detector) S.dropped++; return; }
+  if (now - lastRun < cfg.interval) return;
+  if (!video.videoWidth) return;
+  busy = true; lastRun = now;
+  try {
+    const t = performance.now();
+    const res = detector.detectForVideo(video, now);
+    const ms = performance.now() - t;
+    S.infer.push(ms); if (S.infer.length > 120) S.infer.shift();
+    S.detects++;
+    const dets = (res.detections || []).map(d => ({
+      x: d.boundingBox.originX, y: d.boundingBox.originY,
+      w: d.boundingBox.width,   h: d.boundingBox.height,
+      label: d.categories[0]?.categoryName || '?',
+      score: d.categories[0]?.score || 0
+    }));
+    if (cfg.tracking) updateTracks(dets, now);
+    else tracks = dets.map((d, i) => ({ id: i, raw: d, draw: d, label: d.label,
+                                        score: d.score, seen: 99, lastSeen: now }));
+    lastRaw = dets;
+  } catch (e) { statsEl.textContent = 'detect failed: ' + e.message; }
+  busy = false;
+}
+let lastRaw = [];
+
+// ── drawing ───────────────────────────────────────────────
+function fit() {
+  cv.width = cv.clientWidth * devicePixelRatio;
+  cv.height = cv.clientHeight * devicePixelRatio;
+}
+addEventListener('resize', fit);
+
+// video is object-fit:cover, so map model coords -> screen coords
+function mapper() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const cw = cv.width, ch = cv.height;
+  const scale = Math.max(cw / vw, ch / vh);
+  const dx = (cw - vw * scale) / 2, dy = (ch - vh * scale) / 2;
+  return (x, y, w, h) => [x * scale + dx, y * scale + dy, w * scale, h * scale];
+}
+
+function draw() {
+  S.renders++;
+  cx.clearRect(0, 0, cv.width, cv.height);
+  if (!video.videoWidth) return;
+  const map = mapper();
+
+  if (cfg.showRaw) {
+    cx.strokeStyle = 'rgba(255,255,255,.45)'; cx.lineWidth = 1 * devicePixelRatio;
+    cx.setLineDash([4 * devicePixelRatio, 4 * devicePixelRatio]);
+    for (const d of lastRaw) { const [x,y,w,h] = map(d.x,d.y,d.w,d.h); cx.strokeRect(x,y,w,h); }
+    cx.setLineDash([]);
+  }
+
+  for (const t of tracks) {
+    if (t.seen < APPEAR_AFTER) continue;
+    // ease the drawn box toward the real one
+    t.draw.x += (t.raw.x - t.draw.x) * EASE;
+    t.draw.y += (t.raw.y - t.draw.y) * EASE;
+    t.draw.w += (t.raw.w - t.draw.w) * EASE;
+    t.draw.h += (t.raw.h - t.draw.h) * EASE;
+
+    const [x, y, w, h] = map(t.draw.x, t.draw.y, t.draw.w, t.draw.h);
+    const r = 14 * devicePixelRatio;
+    cx.lineWidth = 3.5 * devicePixelRatio;
+    cx.strokeStyle = '#e36a6a';
+    cx.shadowColor = 'rgba(0,0,0,.5)'; cx.shadowBlur = 6 * devicePixelRatio;
+    cx.beginPath(); cx.roundRect(x, y, w, h, r); cx.stroke();
+    cx.shadowBlur = 0;
+
+    cx.fillStyle = 'rgba(255,251,241,.92)';
+    const label = `${t.label} ${(t.score*100)|0}%`;
+    cx.font = `${13 * devicePixelRatio}px Andika, system-ui`;
+    const tw = cx.measureText(label).width + 12 * devicePixelRatio;
+    cx.beginPath(); cx.roundRect(x, Math.max(0, y - 22*devicePixelRatio), tw, 20*devicePixelRatio, 8*devicePixelRatio); cx.fill();
+    cx.fillStyle = '#5a3330';
+    cx.fillText(label, x + 6*devicePixelRatio, Math.max(0, y - 22*devicePixelRatio) + 14.5*devicePixelRatio);
+  }
+}
+
+// ── the loop ──────────────────────────────────────────────
+let lastFrameAt = 0, looping = false;
+
+function frame(now) {
+  lastFrameAt = performance.now();
+  maybeDetect(now);
+  draw();
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(frame);
+  else requestAnimationFrame(frame);
+}
+
+// rVFC and rAF both stop in a backgrounded tab, which kills the loop for good.
+// A watchdog restarts it, so the page recovers on its own.
+function startLoop() {
+  if (looping) return;
+  looping = true;
+  frame(performance.now());
+}
+setInterval(() => {
+  if (performance.now() - lastFrameAt > 1000 && document.visibilityState === 'visible') {
+    looping = false; startLoop();
+  }
+}, 1000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { looping = false; startLoop(); }
+});
+
+// ── readout ───────────────────────────────────────────────
+let battery = null;
+navigator.getBattery && navigator.getBattery().then(b => battery = b).catch(()=>{});
+setInterval(() => {
+  const secs = (performance.now() - S.t0) / 1000;
+  const shown = tracks.filter(t => t.seen >= APPEAR_AFTER).length;
+  statsEl.innerHTML =
+    `${cfg.model}  thr ${cfg.threshold}  every ${cfg.interval}ms\n` +
+    `infer   <b>${mean(S.infer).toFixed(1)}ms</b>  p90 ${pct(S.infer,.9).toFixed(0)}ms  max ${Math.max(0,...S.infer).toFixed(0)}ms\n` +
+    `detect  <b>${(S.detects/secs).toFixed(1)}/s</b>   render ${(S.renders/secs).toFixed(0)}/s   skipped ${S.dropped}\n` +
+    `boxes   <b>${shown}</b> shown, ${tracks.length} tracked\n` +
+    `jitter  <b>${mean(S.jitter).toFixed(1)}px</b>  p90 ${pct(S.jitter,.9).toFixed(0)}px\n` +
+    `ran     ${secs.toFixed(0)}s` +
+    (battery ? `   battery ${(battery.level*100)|0}%${battery.charging?' (charging)':''}` : '');
+}, 500);
+
+// ── controls ──────────────────────────────────────────────
+const modelsEl = document.getElementById('models');
+for (const name of Object.keys(MODELS)) {
+  const b = document.createElement('button');
+  b.className = 'chip' + (name === cfg.model ? ' on' : '');
+  b.textContent = name.replace('efficientdet_', 'effdet_');
+  b.onclick = async () => {
+    cfg.model = name;
+    [...modelsEl.children].forEach(c => c.classList.remove('on'));
+    b.classList.add('on');
+    await loadDetector(name);
+  };
+  modelsEl.append(b);
+}
+const thr = document.getElementById('thr'), thrOut = document.getElementById('thrOut');
+thr.oninput = () => thrOut.textContent = (+thr.value).toFixed(2);
+thr.onchange = async () => { cfg.threshold = +thr.value; await loadDetector(cfg.model); };
+const ivl = document.getElementById('ivl'), ivlOut = document.getElementById('ivlOut');
+ivl.oninput = () => { cfg.interval = +ivl.value; ivlOut.textContent = ivl.value + 'ms'; };
+document.getElementById('trackBtn').onclick = e => {
+  cfg.tracking = !cfg.tracking; tracks = [];
+  e.target.textContent = 'tracking: ' + (cfg.tracking ? 'on' : 'off');
+  e.target.classList.toggle('on', cfg.tracking);
+};
+document.getElementById('rawBtn').onclick = e => {
+  cfg.showRaw = !cfg.showRaw; e.target.classList.toggle('on', cfg.showRaw);
+};
+document.getElementById('resetBtn').onclick = resetStats;
+
+// tap a box -> show the crop that would be sent to the model
+cv.addEventListener('click', ev => {
+  const rect = cv.getBoundingClientRect();
+  const px = (ev.clientX - rect.left) * devicePixelRatio;
+  const py = (ev.clientY - rect.top) * devicePixelRatio;
+  const map = mapper();
+  const hit = tracks.filter(t => t.seen >= APPEAR_AFTER).find(t => {
+    const [x,y,w,h] = map(t.draw.x,t.draw.y,t.draw.w,t.draw.h);
+    return px>=x && px<=x+w && py>=y && py<=y+h;
+  });
+  if (!hit) return;
+  const c = document.createElement('canvas');
+  const pad = 0.12;
+  const sx = Math.max(0, hit.raw.x - hit.raw.w*pad), sy = Math.max(0, hit.raw.y - hit.raw.h*pad);
+  const sw = Math.min(video.videoWidth - sx,  hit.raw.w*(1+2*pad));
+  const sh = Math.min(video.videoHeight - sy, hit.raw.h*(1+2*pad));
+  c.width = 256; c.height = Math.round(256 * sh/sw);
+  c.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  const w = window.open('', '_blank');
+  if (w) w.document.write(`<title>crop</title><body style="margin:0;background:#111">
+    <img src="${c.toDataURL('image/jpeg',.8)}" style="width:100%">
+    <p style="color:#eee;font:14px system-ui;padding:8px">${hit.label} ${(hit.score*100)|0}% — this is what Gemma would see</p>`);
+});
+
+// exposed so the tracking can be driven deterministically in a test
+window.__lab = {
+  cfg, S,
+  get tracks() { return tracks; },
+  set tracks(v) { tracks = v; },
+  updateTracks, iou, resetStats,
+  APPEAR_AFTER, keepMs
+};
+
+// ── go ────────────────────────────────────────────────────
+(async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+    fit();
+    await loadDetector(cfg.model);
+    startLoop();
+  } catch (e) { statsEl.textContent = 'camera failed: ' + e.message; }
+})();
+</script>
+</body>
+</html>
