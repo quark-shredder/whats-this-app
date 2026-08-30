@@ -57,9 +57,9 @@ body{font:400 15px/1.4 "Andika",system-ui,sans-serif;color:var(--ink);user-selec
     <output id="thrOut">0.15</output>
   </div>
   <div class="row">
-    <label>max boxes</label>
-    <input id="maxb" type="range" min="1" max="8" step="1" value="4">
-    <output id="maxbOut">4</output>
+    <label>merge at</label>
+    <input id="merge" type="range" min="0.05" max="0.8" step="0.05" value="0.25">
+    <output id="mergeOut">25%</output>
   </div>
   <div class="row">
     <label>tap slop</label>
@@ -82,6 +82,7 @@ body{font:400 15px/1.4 "Andika",system-ui,sans-serif;color:var(--ink);user-selec
     <button class="chip on" id="trackBtn">tracking</button>
     <button class="chip" id="rawBtn">raw</button>
     <button class="chip" id="resetBtn">reset</button>
+    <button class="chip" id="slopBtn">tap range</button>
     <button class="chip" id="clearSel">clear pick</button>
   </div>
   <p class="hint">Tap to pick · tap again to send · tap empty space for your own circle</p>
@@ -102,8 +103,8 @@ const MODELS = {
 
 const cfg = { model: 'ssd_mobilenet_v2', threshold: 0.15, interval: 180,
               tracking: true, showRaw: false,
-              fill: true, labels: false, maxBoxes: 4,
-              nmsIou: 0.35, minFrac: 0.04, maxFrac: 0.7, maxAspect: 4,
+              fill: true, labels: false, showSlop: false,
+              mergeOverlap: 0.25, minFrac: 0.012, maxFrac: 0.7, maxAspect: 4,
               tapSlop: 34, circleFrac: 0.20 };
 
 // ── stats ─────────────────────────────────────────────────
@@ -138,47 +139,63 @@ const iou = (a, b) => {
   return i / (a.w * a.h + b.w * b.h - i || 1);
 };
 
-// The detector happily returns four boxes for one suitcase - two classes, two
-// sizes, nested. A child cannot tap that. Keep the strongest, drop anything that
-// overlaps or swallows it, and ignore boxes too small or too large to be a
-// sensible thing to point at.
+// The detector returns four boxes for one suitcase - two classes, two sizes,
+// nested. Rather than throwing the extras away and hoping the survivor is the
+// right one, boxes that overlap are merged into a single region: the child sees
+// one glowing thing and taps it once.
+function overlapFrac(a, b) {
+  const x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
+  const x2 = Math.min(a.x + a.w, b.x + b.w), y2 = Math.min(a.y + a.h, b.y + b.h);
+  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  return inter / Math.min(a.w * a.h, b.w * b.h);
+}
+
 function dedupe(dets, vw, vh) {
   const area = vw * vh;
-  const cxv = vw / 2, cyv = vh / 2;
   const ok = dets.filter(d => {
     const f = (d.w * d.h) / area;
+    // 4% of the frame was dropping cups and toys - the very things a child
+    // points at. With tap tolerance a small region is still easy to hit.
     if (f < cfg.minFrac || f > cfg.maxFrac || d.w < 24 || d.h < 24) return false;
     // A long thin sliver is a wall edge or a bed rail, not a thing a child
     // points at - and left unchecked those outscore the real objects.
-    const aspect = Math.max(d.w / d.h, d.h / d.w);
-    return aspect <= cfg.maxAspect;
+    return Math.max(d.w / d.h, d.h / d.w) <= cfg.maxAspect;
+  });
+  if (!ok.length) return [];
+
+  // union-find: anything overlapping past the threshold joins the same region
+  const parent = ok.map((_, i) => i);
+  const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const join = (i, j) => { const a = find(i), b = find(j); if (a !== b) parent[a] = b; };
+  for (let i = 0; i < ok.length; i++)
+    for (let j = i + 1; j < ok.length; j++)
+      if (overlapFrac(ok[i], ok[j]) > cfg.mergeOverlap) join(i, j);
+
+  const groups = new Map();
+  ok.forEach((d, i) => {
+    const k = find(i);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(d);
   });
 
-  // Rank by confidence, but favour what the child is pointing at: a box near
-  // the middle of the frame is far more likely to be the thing they mean.
+  const regions = [];
+  for (const members of groups.values()) {
+    const x = Math.min(...members.map(m => m.x));
+    const y = Math.min(...members.map(m => m.y));
+    const x2 = Math.max(...members.map(m => m.x + m.w));
+    const y2 = Math.max(...members.map(m => m.y + m.h));
+    const best = members.reduce((a, b) => (b.score > a.score ? b : a));
+    regions.push({ x, y, w: x2 - x, h: y2 - y,
+                   label: best.label, score: best.score, members });
+  }
+
+  // Nearest the middle first - that is what the child is pointing at.
+  const cxv = vw / 2, cyv = vh / 2;
   const rank = d => {
     const dx = (d.x + d.w / 2 - cxv) / vw, dy = (d.y + d.h / 2 - cyv) / vh;
-    const centrality = 1 - Math.min(1, Math.hypot(dx, dy) * 1.6);
-    return d.score * (0.55 + 0.45 * centrality);
+    return d.score * (0.55 + 0.45 * (1 - Math.min(1, Math.hypot(dx, dy) * 1.6)));
   };
-  ok.sort((a, b) => rank(b) - rank(a));
-
-  const kept = [];
-  for (const d of ok) {
-    let clash = false;
-    for (const k of kept) {
-      if (iou(d, k) > cfg.nmsIou) { clash = true; break; }
-      // one box almost entirely inside another is the same thing twice
-      const x1 = Math.max(d.x, k.x), y1 = Math.max(d.y, k.y);
-      const x2 = Math.min(d.x + d.w, k.x + k.w), y2 = Math.min(d.y + d.h, k.y + k.h);
-      const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
-      const contained = inter / Math.min(d.w * d.h, k.w * k.h);
-      if (contained > 0.65) { clash = true; break; }
-    }
-    if (!clash) kept.push(d);
-    if (kept.length >= cfg.maxBoxes) break;
-  }
-  return kept;
+  return regions.sort((a, b) => rank(b) - rank(a));
 }
 
 function updateTracks(dets, now) {
@@ -193,14 +210,14 @@ function updateTracks(dets, now) {
     if (best >= 0) {
       const d = dets[best]; used.add(best);
       S.jitter.push(Math.hypot(d.x - t.raw.x, d.y - t.raw.y));
-      t.raw = d; t.label = d.label; t.score = d.score;
+      t.raw = d; t.label = d.label; t.score = d.score; t.members = d.members;
       t.seen++; t.lastSeen = now;
     }
   }
   dets.forEach((d, i) => {
     if (used.has(i)) return;
     tracks.push({ id: nextId++, raw: d, draw: { ...d }, label: d.label,
-                  score: d.score, seen: 1, lastSeen: now });
+                  score: d.score, members: d.members, seen: 1, lastSeen: now });
   });
   tracks = tracks.filter(t => now - t.lastSeen < keepMs());
 }
@@ -244,7 +261,8 @@ async function maybeDetect(now) {
     const clean = dedupe(dets, video.videoWidth, video.videoHeight);
     if (cfg.tracking) updateTracks(clean, now);
     else tracks = clean.map((d, i) => ({ id: i, raw: d, draw: d, label: d.label,
-                                         score: d.score, seen: 99, lastSeen: now }));
+                                         score: d.score, members: d.members,
+                                         seen: 99, lastSeen: now }));
     lastRaw = dets;
   } catch (e) { statsEl.textContent = 'detect failed: ' + e.message; }
   busy = false;
@@ -337,34 +355,31 @@ function draw() {
     t.draw.h += (t.raw.h - t.draw.h) * EASE;
 
     const [x, y, w, h] = map(t.draw.x, t.draw.y, t.draw.w, t.draw.h);
-    const r = Math.min(w, h) * 0.22;
     const dpr = devicePixelRatio;
+    // Offset the member boxes by however far the smoothed region has drifted
+    // from the raw one, so the merged shape eases as a whole.
+    const ox = t.draw.x - t.raw.x, oy = t.draw.y - t.raw.y;
+    const parts = (t.members && t.members.length ? t.members : [t.raw]);
 
-    cx.beginPath(); cx.roundRect(x, y, w, h, r);
+    // ONE path for every part, filled ONCE - fill them separately and the
+    // overlaps stack into dark patches instead of reading as a single thing.
+    cx.beginPath();
+    for (const m of parts) {
+      const [mx, my, mw, mh] = map(m.x + ox, m.y + oy, m.w, m.h);
+      cx.roundRect(mx, my, mw, mh, Math.min(mw, mh) * 0.24);
+    }
 
-    if (cfg.fill) {
-      // A soft patch of light reads as "this thing" far better than a hard
-      // rectangle, and overlapping patches merge into a glow rather than a
-      // cage of confusing lines.
-      const g = cx.createRadialGradient(
-        x + w/2, y + h/2, Math.min(w,h) * 0.05,
-        x + w/2, y + h/2, Math.max(w,h) * 0.62);
-      const a1 = 0.30 + 0.10 * pulse;
-      g.addColorStop(0,   `rgba(255,226,150,${a1})`);
-      g.addColorStop(0.6, `rgba(255,178,178,${a1 * 0.75})`);
-      g.addColorStop(1,   'rgba(227,106,106,0)');
-      cx.fillStyle = g;
-      cx.fill();
-
-      cx.strokeStyle = `rgba(255,251,241,${0.55 + 0.2 * pulse})`;
-      cx.lineWidth = 2.5 * dpr;
-      cx.stroke();
-    } else {
-      cx.strokeStyle = '#e36a6a';
-      cx.lineWidth = 3.5 * dpr;
-      cx.shadowColor = 'rgba(0,0,0,.5)'; cx.shadowBlur = 6 * dpr;
-      cx.stroke();
-      cx.shadowBlur = 0;
+    if (cfg.showSlop) {
+      const slopPx = cfg.tapSlop * dpr;
+      cx.save();
+      cx.strokeStyle = 'rgba(120,220,255,.75)';
+      cx.lineWidth = 1.5 * dpr;
+      cx.setLineDash([6 * dpr, 6 * dpr]);
+      for (const m of parts) {
+        const [mx, my, mw, mh] = map(m.x + ox, m.y + oy, m.w, m.h);
+        cx.strokeRect(mx - slopPx, my - slopPx, mw + slopPx * 2, mh + slopPx * 2);
+      }
+      cx.restore();
     }
 
     if (selected && selected.kind === 'track' && selected.id === t.id) {
@@ -459,7 +474,8 @@ setInterval(() => {
     `${cfg.model}  thr ${cfg.threshold}  every ${cfg.interval}ms\n` +
     `infer   <b>${mean(S.infer).toFixed(1)}ms</b>  p90 ${pct(S.infer,.9).toFixed(0)}ms  max ${Math.max(0,...S.infer).toFixed(0)}ms\n` +
     `detect  <b>${(S.detects/secs).toFixed(1)}/s</b>   render ${(S.renders/secs).toFixed(0)}/s   skipped ${S.dropped}\n` +
-    `boxes   <b>${shown}</b> shown, ${tracks.length} tracked\n` +
+    `regions <b>${shown}</b> shown, ${tracks.length} tracked` +
+    `  (${tracks.reduce((n,t)=>n+((t.members&&t.members.length)||1),0)} raw boxes merged)\n` +
     `jitter  <b>${mean(S.jitter).toFixed(1)}px</b>  p90 ${pct(S.jitter,.9).toFixed(0)}px\n` +
     `ran     ${secs.toFixed(0)}s` +
     (battery ? `   battery ${(battery.level*100)|0}%${battery.charging?' (charging)':''}` : '');
@@ -484,8 +500,11 @@ thr.oninput = () => thrOut.textContent = (+thr.value).toFixed(2);
 thr.onchange = async () => { cfg.threshold = +thr.value; await loadDetector(cfg.model); };
 const ivl = document.getElementById('ivl'), ivlOut = document.getElementById('ivlOut');
 ivl.oninput = () => { cfg.interval = +ivl.value; ivlOut.textContent = ivl.value + 'ms'; };
-const maxb = document.getElementById('maxb'), maxbOut = document.getElementById('maxbOut');
-maxb.oninput = () => { cfg.maxBoxes = +maxb.value; maxbOut.textContent = maxb.value; };
+const merge = document.getElementById('merge'), mergeOut = document.getElementById('mergeOut');
+merge.oninput = () => {
+  cfg.mergeOverlap = +merge.value;
+  mergeOut.textContent = Math.round(merge.value * 100) + '%';
+};
 document.getElementById('fillBtn').onclick = e => {
   cfg.fill = !cfg.fill; e.target.classList.toggle('on', cfg.fill);
 };
@@ -501,6 +520,9 @@ document.getElementById('rawBtn').onclick = e => {
 };
 document.getElementById('resetBtn').onclick = resetStats;
 document.getElementById('clearSel').onclick = () => { manual = null; selected = null; };
+document.getElementById('slopBtn').onclick = e => {
+  cfg.showSlop = !cfg.showSlop; e.target.classList.toggle('on', cfg.showSlop);
+};
 const slop = document.getElementById('slop'), slopOut = document.getElementById('slopOut');
 slop.oninput = () => { cfg.tapSlop = +slop.value; slopOut.textContent = slop.value + 'px'; };
 const circ = document.getElementById('circ'), circOut = document.getElementById('circOut');
