@@ -21,6 +21,22 @@ let mode = 'ask';           // 'ask' | 'ambient'
 let stream = null, busy = false, ambientOn = false, wakeLock = null;
 let lastFrame = null;       // 16x16 grayscale of the last frame we described
 
+/* ── the log ────────────────────────────────────────────────
+   The phone is usually nowhere near a console, so keep a short ring buffer
+   of what happened and show it in settings. */
+const LOG_MAX = 40;
+function logLine(kind, msg) {
+  const line = `${new Date().toLocaleTimeString()} ${kind} ${msg}`;
+  console.log('[whatsthis]', line);
+  try {
+    const all = JSON.parse(localStorage.getItem('whatsthis-log') || '[]');
+    all.unshift(line);
+    localStorage.setItem('whatsthis-log', JSON.stringify(all.slice(0, LOG_MAX)));
+  } catch (_) {}
+}
+window.addEventListener('error', e => logLine('ERR', e.message));
+window.addEventListener('unhandledrejection', e => logLine('ERR', 'unhandled: ' + (e.reason && e.reason.message || e.reason)));
+
 /* ── voice ─────────────────────────────────────────────────
    Everything speaks through here. To swap in a cloud or
    self-hosted voice later, replace the body of speak() and
@@ -305,7 +321,7 @@ async function describe(imageDataUrl, m) {
   const kb = Math.round(body.length / 1024);
 
   // One retry: on a phone the connection drops often enough that a single
-  // blip should not become "I couldn't see that".
+  // blip should not become an error the child sees.
   let lastErr;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const ctrl = new AbortController();
@@ -313,28 +329,43 @@ async function describe(imageDataUrl, m) {
     try {
       const res = await fetch('/api/describe', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body, signal: ctrl.signal, keepalive: false
+        body, signal: ctrl.signal
       });
       clearTimeout(timer);
       if (!res.ok) throw new Error('http ' + res.status);
       const data = await res.json();
-      console.log(`[${m}] tap->caption ${Math.round(performance.now() - t0)}ms ` +
-                  `(server ${data.ms}ms: see ${data.seeMs} say ${data.sayMs}) upload ${kb}KB` +
-                  (attempt > 1 ? ` [retry ${attempt}]` : ''));
+      logLine('OK', `${m} ${Math.round(performance.now() - t0)}ms ` +
+                    `(see ${data.seeMs} say ${data.sayMs}) ${kb}KB` +
+                    (attempt > 1 ? ` retry${attempt}` : ''));
       return data.text;
     } catch (err) {
       clearTimeout(timer);
       lastErr = err;
-      console.warn(`[${m}] attempt ${attempt} failed after ` +
-                   `${Math.round(performance.now() - t0)}ms: ${err.message}`);
+      logLine('FAIL', `${m} attempt${attempt} after ${Math.round(performance.now() - t0)}ms: ` +
+                      `${err.name}: ${err.message}`);
     }
   }
   throw lastErr;
 }
 
-// The caption is rendered one <span> per word so the spoken word can be lit up.
-// wordAt maps a character offset back to its span.
-let wordSpans = [], wordStarts = [];
+// Work out what actually went wrong, so the child sees the right thing and the
+// grown-up gets a clue. A dead network and a sick model are different problems.
+async function diagnose() {
+  if (!navigator.onLine) return { kid: "I can't hear my helper right now!", why: 'phone is offline' };
+  try {
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 6000);
+    const res = await fetch('/api/health', { cache: 'no-store', signal: ctrl.signal });
+    if (!res.ok) return { kid: "My helper is having a nap!", why: `health http ${res.status}` };
+    const h = await res.json();
+    return { kid: "Hmm, I couldn't see that. Let's try again!", why: `server ok (${h.model}), the look itself failed` };
+  } catch (err) {
+    return {
+      kid: "I can't find my helper! Ask a grown-up.",
+      why: `cannot reach the server (${err.name}) - is Tailscale on, and is the Mac awake?`
+    };
+  }
+}
 
 function show(raw) {
   // The model likes blank lines. white-space:pre on each word span would render
@@ -408,8 +439,9 @@ async function ask() {
     clearInterval(thinkTimer); thinkTimer = null;
     bar.hidden = true;
     setFace('oops'); setTimeout(() => setFace('curious'), 1500);
-    const oops = "Hmm, I couldn't see that. Let's try again!";
-    await speak(show(oops));
+    const d = await diagnose();
+    logLine('DIAG', d.why);
+    await speak(show(d.kid));
   } finally {
     busy = false;
     bar.hidden = true;
@@ -611,6 +643,37 @@ function renderVoices() {
   }
 }
 
+// Live connection check, so a grown-up can see at a glance whether the phone
+// can actually reach the Mac.
+async function checkConn() {
+  const el = $('conn');
+  if (!el) return;
+  if (!navigator.onLine) {
+    el.className = 'conn bad'; el.textContent = 'Phone has no network at all.'; return;
+  }
+  el.className = 'conn'; el.textContent = 'Checking…';
+  const t = performance.now();
+  try {
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 6000);
+    const res = await fetch('/api/health', { cache: 'no-store', signal: ctrl.signal });
+    const h = await res.json();
+    el.className = 'conn ok';
+    el.textContent = `Connected in ${Math.round(performance.now() - t)}ms · ${h.model}`;
+  } catch (err) {
+    el.className = 'conn bad';
+    el.textContent = 'Cannot reach the helper. Is Tailscale on, and the Mac awake?';
+  }
+}
+
+function renderLog() {
+  const el = $('logView');
+  if (!el) return;
+  let all = [];
+  try { all = JSON.parse(localStorage.getItem('whatsthis-log') || '[]'); } catch (_) {}
+  el.textContent = all.length ? all.join('\n') : 'Nothing logged yet.';
+}
+
 function bindSlider(id, key) {
   const el = $(id), out = $(id + 'Val');
   el.value = prefs[key];
@@ -620,6 +683,10 @@ function bindSlider(id, key) {
 }
 bindSlider('rate', 'rate');
 bindSlider('pitch', 'pitch');
+$('clearLog').onclick = () => { localStorage.removeItem('whatsthis-log'); renderLog(); };
+$('conn').onclick = checkConn;
+addEventListener('online',  () => logLine('NET', 'back online'));
+addEventListener('offline', () => logLine('NET', 'went offline'));
 
 /* ── navigation ─────────────────────────────────────────── */
 // `push` is false when the move came from the browser's own back button,
@@ -653,7 +720,7 @@ async function go(to, push = true) {
   } else {
     stopCamera();
     if (to === 'book') renderBook();
-    if (to === 'voice') renderVoices();
+    if (to === 'voice') { renderVoices(); renderLog(); checkConn(); }
   }
 }
 

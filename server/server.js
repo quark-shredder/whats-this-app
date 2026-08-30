@@ -143,6 +143,10 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/api/describe' && req.method === 'POST') {
     const started = Date.now();
+    // Log arrival, not just completion - otherwise a request that dies mid-flight
+    // leaves no trace at all, and you cannot tell it from one that never came.
+    console.log(`[${new Date().toISOString().slice(11,19)}] <- describe from ` +
+                `${req.socket.remoteAddress} ua="${(req.headers['user-agent']||'').slice(0,40)}"`);
     try {
       const { image, mode } = JSON.parse(await readBody(req));
       if (!image) throw new Error('no image');

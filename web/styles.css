@@ -255,3 +255,28 @@ body{
   25%    {transform:translateX(-5px)}
   75%    {transform:translateX(5px)}
 }
+
+/* ── diagnostics, for the grown-up ──────────
+   The phone is never near a console, so the last few events and the current
+   connection state are readable in settings. */
+.subhead{font-size:1.05rem;font-weight:700;margin:18px 0 10px;color:var(--ink)}
+.conn{
+  border-radius:14px;padding:13px 15px;font-size:.95rem;font-weight:700;text-align:center;
+  background:var(--butter);color:var(--ink);
+}
+.conn.ok{background:#d7f0dc;color:#2f5d3a}
+.conn.bad{background:#ffd9d9;color:#8c2f2f}
+.diag{margin:10px 0 4px}
+.diag summary{
+  font-size:.95rem;font-weight:700;opacity:.75;padding:8px 2px;cursor:pointer;
+}
+.diag .tiny{margin:0 0 8px}
+.tiny{
+  border:0;border-radius:99px;padding:6px 12px;
+  background:var(--blush);color:var(--ink);font:700 .8rem "Andika",system-ui,sans-serif;
+}
+.logview{
+  background:var(--butter);border-radius:14px;padding:12px;
+  font:400 11.5px/1.5 ui-monospace,Menlo,monospace;color:var(--ink);
+  max-height:34vh;overflow:auto;white-space:pre-wrap;word-break:break-word;
+}
