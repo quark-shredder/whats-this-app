@@ -57,14 +57,21 @@ body{font:400 15px/1.4 "Andika",system-ui,sans-serif;color:var(--ink);user-selec
     <output id="thrOut">0.15</output>
   </div>
   <div class="row">
+    <label>max boxes</label>
+    <input id="maxb" type="range" min="1" max="8" step="1" value="4">
+    <output id="maxbOut">4</output>
+  </div>
+  <div class="row">
     <label>interval</label>
     <input id="ivl" type="range" min="60" max="600" step="20" value="180">
     <output id="ivlOut">180ms</output>
   </div>
   <div class="chips">
-    <button class="chip on" id="trackBtn">tracking: on</button>
-    <button class="chip" id="rawBtn">show raw too</button>
-    <button class="chip" id="resetBtn">reset stats</button>
+    <button class="chip on" id="fillBtn">fill</button>
+    <button class="chip" id="labelBtn">labels</button>
+    <button class="chip on" id="trackBtn">tracking</button>
+    <button class="chip" id="rawBtn">raw</button>
+    <button class="chip" id="resetBtn">reset</button>
   </div>
   <p class="hint">Tap a box to check the crop it would send</p>
 </div>
@@ -83,7 +90,9 @@ const MODELS = {
 };
 
 const cfg = { model: 'ssd_mobilenet_v2', threshold: 0.15, interval: 180,
-              tracking: true, showRaw: false };
+              tracking: true, showRaw: false,
+              fill: true, labels: false, maxBoxes: 4,
+              nmsIou: 0.35, minFrac: 0.04, maxFrac: 0.7, maxAspect: 4 };
 
 // ── stats ─────────────────────────────────────────────────
 const S = {
@@ -104,7 +113,7 @@ function resetStats() {
 let tracks = [];
 let nextId = 1;
 const APPEAR_AFTER = 2;      // detections in a row before we draw it
-const EASE         = 0.35;   // how fast the drawn box chases the real one
+const EASE         = 0.18;   // gentler chase; measured jitter on a phone was 20px
 // How long a track survives with no detection. Must scale with the detect
 // interval: at a fixed 550ms, raising the interval to 300ms would kill a box
 // after two misses, which is exactly when a child's finger is on its way down.
@@ -116,6 +125,49 @@ const iou = (a, b) => {
   const i = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
   return i / (a.w * a.h + b.w * b.h - i || 1);
 };
+
+// The detector happily returns four boxes for one suitcase - two classes, two
+// sizes, nested. A child cannot tap that. Keep the strongest, drop anything that
+// overlaps or swallows it, and ignore boxes too small or too large to be a
+// sensible thing to point at.
+function dedupe(dets, vw, vh) {
+  const area = vw * vh;
+  const cxv = vw / 2, cyv = vh / 2;
+  const ok = dets.filter(d => {
+    const f = (d.w * d.h) / area;
+    if (f < cfg.minFrac || f > cfg.maxFrac || d.w < 24 || d.h < 24) return false;
+    // A long thin sliver is a wall edge or a bed rail, not a thing a child
+    // points at - and left unchecked those outscore the real objects.
+    const aspect = Math.max(d.w / d.h, d.h / d.w);
+    return aspect <= cfg.maxAspect;
+  });
+
+  // Rank by confidence, but favour what the child is pointing at: a box near
+  // the middle of the frame is far more likely to be the thing they mean.
+  const rank = d => {
+    const dx = (d.x + d.w / 2 - cxv) / vw, dy = (d.y + d.h / 2 - cyv) / vh;
+    const centrality = 1 - Math.min(1, Math.hypot(dx, dy) * 1.6);
+    return d.score * (0.55 + 0.45 * centrality);
+  };
+  ok.sort((a, b) => rank(b) - rank(a));
+
+  const kept = [];
+  for (const d of ok) {
+    let clash = false;
+    for (const k of kept) {
+      if (iou(d, k) > cfg.nmsIou) { clash = true; break; }
+      // one box almost entirely inside another is the same thing twice
+      const x1 = Math.max(d.x, k.x), y1 = Math.max(d.y, k.y);
+      const x2 = Math.min(d.x + d.w, k.x + k.w), y2 = Math.min(d.y + d.h, k.y + k.h);
+      const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+      const contained = inter / Math.min(d.w * d.h, k.w * k.h);
+      if (contained > 0.65) { clash = true; break; }
+    }
+    if (!clash) kept.push(d);
+    if (kept.length >= cfg.maxBoxes) break;
+  }
+  return kept;
+}
 
 function updateTracks(dets, now) {
   const used = new Set();
@@ -177,9 +229,10 @@ async function maybeDetect(now) {
       label: d.categories[0]?.categoryName || '?',
       score: d.categories[0]?.score || 0
     }));
-    if (cfg.tracking) updateTracks(dets, now);
-    else tracks = dets.map((d, i) => ({ id: i, raw: d, draw: d, label: d.label,
-                                        score: d.score, seen: 99, lastSeen: now }));
+    const clean = dedupe(dets, video.videoWidth, video.videoHeight);
+    if (cfg.tracking) updateTracks(clean, now);
+    else tracks = clean.map((d, i) => ({ id: i, raw: d, draw: d, label: d.label,
+                                         score: d.score, seen: 99, lastSeen: now }));
     lastRaw = dets;
   } catch (e) { statsEl.textContent = 'detect failed: ' + e.message; }
   busy = false;
@@ -215,6 +268,8 @@ function draw() {
     cx.setLineDash([]);
   }
 
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 620);
+
   for (const t of tracks) {
     if (t.seen < APPEAR_AFTER) continue;
     // ease the drawn box toward the real one
@@ -224,20 +279,46 @@ function draw() {
     t.draw.h += (t.raw.h - t.draw.h) * EASE;
 
     const [x, y, w, h] = map(t.draw.x, t.draw.y, t.draw.w, t.draw.h);
-    const r = 14 * devicePixelRatio;
-    cx.lineWidth = 3.5 * devicePixelRatio;
-    cx.strokeStyle = '#e36a6a';
-    cx.shadowColor = 'rgba(0,0,0,.5)'; cx.shadowBlur = 6 * devicePixelRatio;
-    cx.beginPath(); cx.roundRect(x, y, w, h, r); cx.stroke();
-    cx.shadowBlur = 0;
+    const r = Math.min(w, h) * 0.22;
+    const dpr = devicePixelRatio;
 
-    cx.fillStyle = 'rgba(255,251,241,.92)';
-    const label = `${t.label} ${(t.score*100)|0}%`;
-    cx.font = `${13 * devicePixelRatio}px Andika, system-ui`;
-    const tw = cx.measureText(label).width + 12 * devicePixelRatio;
-    cx.beginPath(); cx.roundRect(x, Math.max(0, y - 22*devicePixelRatio), tw, 20*devicePixelRatio, 8*devicePixelRatio); cx.fill();
-    cx.fillStyle = '#5a3330';
-    cx.fillText(label, x + 6*devicePixelRatio, Math.max(0, y - 22*devicePixelRatio) + 14.5*devicePixelRatio);
+    cx.beginPath(); cx.roundRect(x, y, w, h, r);
+
+    if (cfg.fill) {
+      // A soft patch of light reads as "this thing" far better than a hard
+      // rectangle, and overlapping patches merge into a glow rather than a
+      // cage of confusing lines.
+      const g = cx.createRadialGradient(
+        x + w/2, y + h/2, Math.min(w,h) * 0.05,
+        x + w/2, y + h/2, Math.max(w,h) * 0.62);
+      const a1 = 0.30 + 0.10 * pulse;
+      g.addColorStop(0,   `rgba(255,226,150,${a1})`);
+      g.addColorStop(0.6, `rgba(255,178,178,${a1 * 0.75})`);
+      g.addColorStop(1,   'rgba(227,106,106,0)');
+      cx.fillStyle = g;
+      cx.fill();
+
+      cx.strokeStyle = `rgba(255,251,241,${0.55 + 0.2 * pulse})`;
+      cx.lineWidth = 2.5 * dpr;
+      cx.stroke();
+    } else {
+      cx.strokeStyle = '#e36a6a';
+      cx.lineWidth = 3.5 * dpr;
+      cx.shadowColor = 'rgba(0,0,0,.5)'; cx.shadowBlur = 6 * dpr;
+      cx.stroke();
+      cx.shadowBlur = 0;
+    }
+
+    if (cfg.labels) {
+      const label = `${t.label} ${(t.score*100)|0}%`;
+      cx.font = `${13 * dpr}px Andika, system-ui`;
+      const tw = cx.measureText(label).width + 12 * dpr;
+      const ly = Math.max(0, y - 22 * dpr);
+      cx.fillStyle = 'rgba(255,251,241,.92)';
+      cx.beginPath(); cx.roundRect(x, ly, tw, 20 * dpr, 8 * dpr); cx.fill();
+      cx.fillStyle = '#5a3330';
+      cx.fillText(label, x + 6 * dpr, ly + 14.5 * dpr);
+    }
   }
 }
 
@@ -303,9 +384,16 @@ thr.oninput = () => thrOut.textContent = (+thr.value).toFixed(2);
 thr.onchange = async () => { cfg.threshold = +thr.value; await loadDetector(cfg.model); };
 const ivl = document.getElementById('ivl'), ivlOut = document.getElementById('ivlOut');
 ivl.oninput = () => { cfg.interval = +ivl.value; ivlOut.textContent = ivl.value + 'ms'; };
+const maxb = document.getElementById('maxb'), maxbOut = document.getElementById('maxbOut');
+maxb.oninput = () => { cfg.maxBoxes = +maxb.value; maxbOut.textContent = maxb.value; };
+document.getElementById('fillBtn').onclick = e => {
+  cfg.fill = !cfg.fill; e.target.classList.toggle('on', cfg.fill);
+};
+document.getElementById('labelBtn').onclick = e => {
+  cfg.labels = !cfg.labels; e.target.classList.toggle('on', cfg.labels);
+};
 document.getElementById('trackBtn').onclick = e => {
   cfg.tracking = !cfg.tracking; tracks = [];
-  e.target.textContent = 'tracking: ' + (cfg.tracking ? 'on' : 'off');
   e.target.classList.toggle('on', cfg.tracking);
 };
 document.getElementById('rawBtn').onclick = e => {
@@ -342,7 +430,7 @@ window.__lab = {
   cfg, S,
   get tracks() { return tracks; },
   set tracks(v) { tracks = v; },
-  updateTracks, iou, resetStats,
+  updateTracks, iou, dedupe, resetStats,
   APPEAR_AFTER, keepMs
 };
 
