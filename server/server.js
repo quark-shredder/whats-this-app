@@ -10,6 +10,10 @@ const PORT   = process.env.PORT   || 8080;
 const OLLAMA = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 const MODEL  = process.env.MODEL  || 'gemma3:4b';
 const WEB    = path.join(__dirname, '..', 'web');
+// Set CAPTURES=<dir> to keep every frame the child sends. Off by default; this
+// is for building an evaluation set out of real captures rather than tidy stock
+// photos, which is the only honest way to compare detectors for this app.
+const CAPTURES = process.env.CAPTURES || '';
 
 // Two prompts: a fuller answer when the child asks, a one-liner when we narrate.
 // Seeing and speaking are two different jobs. Asking one small model to do both at
@@ -133,6 +137,20 @@ async function describe(image, mode) {
   return { text: said || seen, seen, seeMs, sayMs };
 }
 
+// Write the frame to disk so real captures can be replayed against detectors
+// later. Never blocks the reply.
+let captureSeq = 0;
+function saveCapture(imageB64, mode) {
+  try {
+    fs.mkdirSync(CAPTURES, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const name = `${stamp}_${mode}_${String(++captureSeq).padStart(3, '0')}.jpg`;
+    fs.writeFile(path.join(CAPTURES, name), Buffer.from(imageB64, 'base64'), err => {
+      if (err) console.error('capture save failed:', err.message);
+    });
+  } catch (err) { console.error('capture save failed:', err.message); }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
@@ -151,6 +169,7 @@ const server = http.createServer(async (req, res) => {
       const { image, mode } = JSON.parse(await readBody(req));
       if (!image) throw new Error('no image');
       const bytes = Math.round(image.length * 0.75 / 1024);
+      if (CAPTURES) saveCapture(image, mode);
       const { text, seen, seeMs, sayMs } = await describe(image, mode);
       const total = Date.now() - started;
       console.log(`[${mode}] total=${total}ms (see=${seeMs} say=${sayMs} other=${total - seeMs - sayMs}) ` +

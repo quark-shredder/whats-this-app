@@ -14,4 +14,5 @@ pgrep -f "ollama serve" >/dev/null || {
 MODEL="${MODEL:-gemma3:4b}" \
 OLLAMA_URL="http://127.0.0.1:11435" \
 PORT="${PORT:-8080}" \
+CAPTURES="${CAPTURES:-$HERE/captures}" \
   node "$HERE/server/server.js"
