@@ -94,11 +94,13 @@ const cv = document.getElementById('overlay');
 const cx = cv.getContext('2d');
 const statsEl = document.getElementById('stats');
 
-const B = 'https://storage.googleapis.com/mediapipe-models/object_detector/';
+// Self-hosted: the phone reaches the Mac over the tailnet but may have no
+// route to the public internet, and a CDN that never loads means no detector
+// and no boxes at all.
 const MODELS = {
-  'ssd_mobilenet_v2':   B + 'ssd_mobilenet_v2/float16/1/ssd_mobilenet_v2.tflite',
-  'efficientdet_lite0': B + 'efficientdet_lite0/float16/1/efficientdet_lite0.tflite',
-  'efficientdet_lite2': B + 'efficientdet_lite2/float16/1/efficientdet_lite2.tflite',
+  'ssd_mobilenet_v2':   'vendor/models/ssd_mobilenet_v2.tflite',
+  'efficientdet_lite0': 'vendor/models/efficientdet_lite0.tflite',
+  'efficientdet_lite2': 'vendor/models/efficientdet_lite2.tflite',
 };
 
 const cfg = { model: 'ssd_mobilenet_v2', threshold: 0.15, interval: 180,
@@ -227,10 +229,19 @@ let detector = null, busy = false, lastRun = 0, vision = null, fileset = null;
 
 async function loadDetector(name) {
   statsEl.textContent = 'loading ' + name + '…';
+  try {
+    await loadDetectorInner(name);
+  } catch (err) {
+    statsEl.innerHTML = '<b>detector failed to load</b>\n' + String(err.message).slice(0, 200) +
+      '\n\nthe camera still works, but nothing can be highlighted';
+    throw err;
+  }
+}
+
+async function loadDetectorInner(name) {
   if (!vision) {
-    vision = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18');
-    fileset = await vision.FilesetResolver.forVisionTasks(
-      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm');
+    vision = await import('./vendor/mediapipe/vision_bundle.mjs');
+    fileset = await vision.FilesetResolver.forVisionTasks('./vendor/mediapipe');
   }
   const old = detector; detector = null;
   if (old) old.close();

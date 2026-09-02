@@ -81,6 +81,14 @@ Never mention photos, pictures, cameras, or say "I see".`
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js':   'text/javascript; charset=utf-8',
+  // a module served as octet-stream is refused by the browser, and the
+  // streaming WASM compiler insists on application/wasm
+  '.mjs':  'text/javascript; charset=utf-8',
+  '.wasm': 'application/wasm',
+  '.tflite': 'application/octet-stream',
+  '.woff2': 'font/woff2',
+  '.jpg':  'image/jpeg',
+  '.webp': 'image/webp',
   '.css':  'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.webmanifest': 'application/manifest+json; charset=utf-8',
