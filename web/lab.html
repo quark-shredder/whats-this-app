@@ -152,6 +152,18 @@ function overlapFrac(a, b) {
   return inter / Math.min(a.w * a.h, b.w * b.h);
 }
 
+// Two boxes are the same thing seen twice only if they cover roughly the same
+// area - that is IoU. Containment cannot tell them apart: a bottle held in
+// front of a person sits 100% inside the person, and so does a duplicate box
+// on one suitcase. IoU separates them cleanly, 7% against 69%.
+function shouldMerge(a, b) {
+  if (iou(a, b) > cfg.mergeOverlap) return true;
+  // A nested box of the same kind is still one thing - a suitcase inside a
+  // suitcase. A bottle inside a person is two things, and keeps its own shape.
+  if (a.label === b.label && overlapFrac(a, b) > 0.85) return true;
+  return false;
+}
+
 function dedupe(dets, vw, vh) {
   const area = vw * vh;
   const ok = dets.filter(d => {
@@ -171,7 +183,7 @@ function dedupe(dets, vw, vh) {
   const join = (i, j) => { const a = find(i), b = find(j); if (a !== b) parent[a] = b; };
   for (let i = 0; i < ok.length; i++)
     for (let j = i + 1; j < ok.length; j++)
-      if (overlapFrac(ok[i], ok[j]) > cfg.mergeOverlap) join(i, j);
+      if (shouldMerge(ok[i], ok[j])) join(i, j);
 
   const groups = new Map();
   ok.forEach((d, i) => {
