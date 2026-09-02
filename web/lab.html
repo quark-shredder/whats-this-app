@@ -82,10 +82,11 @@ body{font:400 15px/1.4 "Andika",system-ui,sans-serif;color:var(--ink);user-selec
     <button class="chip on" id="trackBtn">tracking</button>
     <button class="chip" id="rawBtn">raw</button>
     <button class="chip" id="resetBtn">reset</button>
+    <button class="chip" id="segBtn">segment</button>
     <button class="chip" id="slopBtn">tap range</button>
     <button class="chip" id="clearSel">clear pick</button>
   </div>
-  <p class="hint">Tap to pick · tap again to send · tap empty space for your own circle</p>
+  <p class="hint">Tap to pick · tap again to send · segment mode outlines the real object</p>
 </div>
 
 <script type="module">
@@ -107,7 +108,7 @@ const cfg = { model: 'ssd_mobilenet_v2', threshold: 0.15, interval: 180,
               tracking: true, showRaw: false,
               fill: true, labels: false, showSlop: false,
               mergeOverlap: 0.25, minFrac: 0.012, maxFrac: 0.7, maxAspect: 4,
-              tapSlop: 34, circleFrac: 0.20 };
+              tapSlop: 34, circleFrac: 0.20, segment: false };
 
 // ── stats ─────────────────────────────────────────────────
 const S = {
@@ -342,6 +343,7 @@ function nearestTrack(vx, vy, slopVideo) {
 }
 
 function visibleTracks() {
+  if (cfg.segment && segCanvas) return [];   // the mask is the highlight now
   const list = tracks.filter(t => t.seen >= APPEAR_AFTER);
   if (!manual) return list;
   // the child's circle takes precedence over anything it substantially covers
@@ -451,6 +453,17 @@ function draw() {
     }
   }
 
+  // the segmented object, drawn as its real silhouette rather than a box
+  if (cfg.segment && segCanvas) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const sc = Math.max(cv.width / vw, cv.height / vh);
+    const dx = (cv.width - vw * sc) / 2, dy = (cv.height - vh * sc) / 2;
+    cx.save();
+    cx.globalAlpha = 0.55 + 0.2 * pulse;
+    cx.drawImage(segCanvas, dx, dy, vw * sc, vh * sc);
+    cx.restore();
+  }
+
   // the child's own circle
   if (manual) {
     const [mx, my, mw] = map(manual.x - manual.r, manual.y - manual.r, manual.r * 2, manual.r * 2);
@@ -525,6 +538,7 @@ setInterval(() => {
     `regions <b>${shown}</b> shown, ${tracks.length} tracked` +
     `  (${tracks.reduce((n,t)=>n+((t.members&&t.members.length)||1),0)} raw boxes merged)\n` +
     `jitter  <b>${mean(S.jitter).toFixed(1)}px</b>  p90 ${pct(S.jitter,.9).toFixed(0)}px\n` +
+    (cfg.segment ? `segment <b>${segMs ? segMs.toFixed(0) + 'ms' : '—'}</b>  ${segCanvas ? 'mask shown' : 'tap something'}\n` : '') +
     `ran     ${secs.toFixed(0)}s` +
     (battery ? `   battery ${(battery.level*100)|0}%${battery.charging?' (charging)':''}` : '');
 }, 500);
@@ -568,6 +582,11 @@ document.getElementById('rawBtn').onclick = e => {
 };
 document.getElementById('resetBtn').onclick = resetStats;
 document.getElementById('clearSel').onclick = () => { manual = null; selected = null; };
+document.getElementById('segBtn').onclick = e => {
+  cfg.segment = !cfg.segment;
+  segCanvas = null;
+  e.target.classList.toggle('on', cfg.segment);
+};
 document.getElementById('slopBtn').onclick = e => {
   cfg.showSlop = !cfg.showSlop; e.target.classList.toggle('on', cfg.showSlop);
 };
@@ -578,6 +597,62 @@ circ.oninput = () => {
   cfg.circleFrac = +circ.value; circOut.textContent = Math.round(circ.value*100) + '%';
   if (manual) manual.r = Math.min(video.videoWidth, video.videoHeight) * cfg.circleFrac / 2;
 };
+
+/* ── segmentation ───────────────────────────────────────────
+   A box is a poor stand-in for a bottle. MagicTouch takes the point the child
+   touched and returns a mask of the object actually under it, so the highlight
+   follows the real silhouette. Far too slow for every frame at ~200ms, but it
+   only ever runs on a tap. */
+let segmenter = null, segCanvas = null, segMs = 0, segBusy = false;
+
+async function loadSegmenter() {
+  if (segmenter) return segmenter;
+  if (!vision) throw new Error('vision runtime not loaded yet');
+  segmenter = await vision.InteractiveSegmenter.createFromOptions(fileset, {
+    baseOptions: { modelAssetPath: 'vendor/models/magic_touch.tflite', delegate: 'GPU' },
+    outputCategoryMask: true, outputConfidenceMasks: false
+  });
+  return segmenter;
+}
+
+// Turn the mask into a tinted canvas we can composite over the video.
+function maskToCanvas(mask, w, h) {
+  const out = document.createElement('canvas');
+  out.width = w; out.height = h;
+  const ctx = out.getContext('2d');
+  const img = ctx.createImageData(w, h);
+  const d = img.data;
+  for (let i = 0; i < mask.length; i++) {
+    // MagicTouch marks the chosen object as 0 and the rest as 255
+    const on = mask[i] === 0;
+    const p = i * 4;
+    if (on) { d[p] = 255; d[p+1] = 214; d[p+2] = 150; d[p+3] = 150; }
+    else    { d[p+3] = 0; }
+  }
+  ctx.putImageData(img, 0, 0);
+  return out;
+}
+
+async function segmentAt(vx, vy) {
+  if (segBusy) return;
+  segBusy = true;
+  try {
+    const seg = await loadSegmenter();
+    const t = performance.now();
+    const res = seg.segment(video, {
+      keypoint: { x: vx / video.videoWidth, y: vy / video.videoHeight }
+    });
+    segMs = performance.now() - t;
+    const cm = res.categoryMask;
+    if (cm) {
+      segCanvas = maskToCanvas(cm.getAsUint8Array(), cm.width, cm.height);
+      cm.close();
+    }
+    res.close && res.close();
+  } catch (err) {
+    statsEl.innerHTML = 'segmentation failed\n' + String(err.message).slice(0, 160);
+  } finally { segBusy = false; }
+}
 
 /* ── the tap ────────────────────────────────────────────────
    First tap chooses: a highlight if one is near enough, otherwise the child's
@@ -609,6 +684,7 @@ function handleTap(clientX, clientY) {
   if (!video.videoWidth) return;
 
   const [vx, vy] = unmapper()(px, py);
+  if (cfg.segment) { segCanvas = null; segmentAt(vx, vy); }
   const scale = Math.max(cv.width / video.videoWidth, cv.height / video.videoHeight);
   const slopVideo = (cfg.tapSlop * devicePixelRatio) / scale;
 
