@@ -380,6 +380,31 @@ function draw() {
       cx.roundRect(mx, my, mw, mh, Math.min(mw, mh) * 0.24);
     }
 
+    // Paint the merged path: one fill for the whole region, so overlapping
+    // parts read as a single glowing thing rather than stacking darker.
+    if (cfg.fill) {
+      const g = cx.createRadialGradient(
+        x + w / 2, y + h / 2, Math.min(w, h) * 0.05,
+        x + w / 2, y + h / 2, Math.max(w, h) * 0.62);
+      const a1 = 0.34 + 0.12 * pulse;
+      g.addColorStop(0,    `rgba(255,226,150,${a1})`);
+      g.addColorStop(0.55, `rgba(255,178,178,${a1 * 0.8})`);
+      g.addColorStop(1,    'rgba(227,106,106,0.05)');
+      cx.fillStyle = g;
+      cx.fill();
+      cx.strokeStyle = `rgba(255,251,241,${0.7 + 0.2 * pulse})`;
+      cx.lineWidth = 3 * dpr;
+      cx.shadowColor = 'rgba(90,51,48,.55)'; cx.shadowBlur = 8 * dpr;
+      cx.stroke();
+      cx.shadowBlur = 0;
+    } else {
+      cx.strokeStyle = '#e36a6a';
+      cx.lineWidth = 4 * dpr;
+      cx.shadowColor = 'rgba(0,0,0,.5)'; cx.shadowBlur = 6 * dpr;
+      cx.stroke();
+      cx.shadowBlur = 0;
+    }
+
     if (cfg.showSlop) {
       const slopPx = cfg.tapSlop * dpr;
       cx.save();
