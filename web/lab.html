@@ -538,7 +538,8 @@ setInterval(() => {
     `regions <b>${shown}</b> shown, ${tracks.length} tracked` +
     `  (${tracks.reduce((n,t)=>n+((t.members&&t.members.length)||1),0)} raw boxes merged)\n` +
     `jitter  <b>${mean(S.jitter).toFixed(1)}px</b>  p90 ${pct(S.jitter,.9).toFixed(0)}px\n` +
-    (cfg.segment ? `segment <b>${segMs ? segMs.toFixed(0) + 'ms' : '—'}</b>  ${segCanvas ? 'mask shown' : 'tap something'}\n` : '') +
+    `segment <b>${cfg.segment ? 'ON' : 'off'}</b>  ${cfg.segment ? segState : ''}` +
+      `${cfg.segment && segMs ? '  ' + segMs.toFixed(0) + 'ms' : ''}\n` +
     `ran     ${secs.toFixed(0)}s` +
     (battery ? `   battery ${(battery.level*100)|0}%${battery.charging?' (charging)':''}` : '');
 }, 500);
@@ -585,6 +586,7 @@ document.getElementById('clearSel').onclick = () => { manual = null; selected = 
 document.getElementById('segBtn').onclick = e => {
   cfg.segment = !cfg.segment;
   segCanvas = null;
+  segState = cfg.segment ? 'on — now tap an object' : 'off';
   e.target.classList.toggle('on', cfg.segment);
 };
 document.getElementById('slopBtn').onclick = e => {
@@ -604,38 +606,50 @@ circ.oninput = () => {
    follows the real silhouette. Far too slow for every frame at ~200ms, but it
    only ever runs on a tap. */
 let segmenter = null, segCanvas = null, segMs = 0, segBusy = false;
+let segState = 'off';        // shown in the readout so its state is never a guess
 
 async function loadSegmenter() {
   if (segmenter) return segmenter;
-  if (!vision) throw new Error('vision runtime not loaded yet');
-  segmenter = await vision.InteractiveSegmenter.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: 'vendor/models/magic_touch.tflite', delegate: 'GPU' },
-    outputCategoryMask: true, outputConfidenceMasks: false
-  });
-  return segmenter;
+  if (!vision || !fileset) throw new Error('vision runtime not ready');
+  // GPU is faster but is refused on some devices; fall back rather than fail.
+  for (const delegate of ['GPU', 'CPU']) {
+    try {
+      segState = 'loading (' + delegate + ')';
+      segmenter = await vision.InteractiveSegmenter.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: 'vendor/models/magic_touch.tflite', delegate },
+        outputCategoryMask: true, outputConfidenceMasks: false
+      });
+      return segmenter;
+    } catch (err) {
+      if (delegate === 'CPU') throw err;
+    }
+  }
 }
 
-// Turn the mask into a tinted canvas we can composite over the video.
-function maskToCanvas(mask, w, h) {
+// The mask marks the chosen object with one value and everything else with
+// another; which is which is not worth assuming, so pick whichever label sits
+// under the finger and light that.
+function maskToCanvas(mask, w, h, hitIndex) {
+  const want = mask[hitIndex];
   const out = document.createElement('canvas');
   out.width = w; out.height = h;
   const ctx = out.getContext('2d');
   const img = ctx.createImageData(w, h);
   const d = img.data;
+  let on = 0;
   for (let i = 0; i < mask.length; i++) {
-    // MagicTouch marks the chosen object as 0 and the rest as 255
-    const on = mask[i] === 0;
     const p = i * 4;
-    if (on) { d[p] = 255; d[p+1] = 214; d[p+2] = 150; d[p+3] = 150; }
-    else    { d[p+3] = 0; }
+    if (mask[i] === want) {
+      d[p] = 255; d[p + 1] = 214; d[p + 2] = 150; d[p + 3] = 165; on++;
+    } else d[p + 3] = 0;
   }
   ctx.putImageData(img, 0, 0);
-  return out;
+  return { canvas: out, coverage: on / mask.length };
 }
 
 async function segmentAt(vx, vy) {
   if (segBusy) return;
-  segBusy = true;
+  segBusy = true; segState = 'running'; segCanvas = null;
   try {
     const seg = await loadSegmenter();
     const t = performance.now();
@@ -643,14 +657,22 @@ async function segmentAt(vx, vy) {
       keypoint: { x: vx / video.videoWidth, y: vy / video.videoHeight }
     });
     segMs = performance.now() - t;
+    if (!res) throw new Error('segment() returned nothing');
     const cm = res.categoryMask;
-    if (cm) {
-      segCanvas = maskToCanvas(cm.getAsUint8Array(), cm.width, cm.height);
-      cm.close();
-    }
-    res.close && res.close();
+    if (!cm) throw new Error('no categoryMask in result');
+
+    const data = cm.getAsUint8Array();
+    const hx = Math.min(cm.width  - 1, Math.max(0, Math.round(vx / video.videoWidth  * cm.width)));
+    const hy = Math.min(cm.height - 1, Math.max(0, Math.round(vy / video.videoHeight * cm.height)));
+    const { canvas, coverage } = maskToCanvas(data, cm.width, cm.height, hy * cm.width + hx);
+
+    // A mask covering nearly everything means it selected the background.
+    if (coverage > 0.92) { segState = 'mask covered the whole frame'; segCanvas = null; }
+    else { segCanvas = canvas; segState = `mask shown (${(coverage * 100).toFixed(0)}% of frame)`; }
+    cm.close();                       // res.close() would close this twice
   } catch (err) {
-    statsEl.innerHTML = 'segmentation failed\n' + String(err.message).slice(0, 160);
+    segState = 'FAILED: ' + String(err && err.message || err).slice(0, 90);
+    segCanvas = null;
   } finally { segBusy = false; }
 }
 
